@@ -237,6 +237,20 @@ textarea::placeholder { color: rgba(242,239,236,.34); }
 .bar-meta .keys { margin-left: auto; flex: none; }
 .warn { color: #ffb9a5; }
 
+/* Silence countdown — drains to nothing, then the note commits itself. */
+.countdown {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  border-radius: 0 0 14px 14px;
+  background: linear-gradient(90deg, rgba(255,92,57,.35), var(--accent));
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.countdown.on { opacity: 1; }
+
 /* ── toast ─────────────────────────────────────────────── */
 .toast {
   position: absolute;
@@ -281,6 +295,7 @@ export interface Overlay {
   interim: HTMLElement;
   chip: HTMLElement;
   where: HTMLElement;
+  countdown: HTMLElement;
   toast: HTMLElement;
 }
 
@@ -292,7 +307,7 @@ const html = (markup: string): HTMLElement => {
 
 export function createOverlay(): Overlay {
   const host = document.createElement('div');
-  host.id = 'bug-recorder-root';
+  host.id = 'gripe-root';
   const shadow = host.attachShadow({ mode: 'open' });
 
   const style = document.createElement('style');
@@ -328,9 +343,10 @@ export function createOverlay(): Overlay {
           <span class="chip"></span>
           <span class="where"></span>
           <span class="keys">
-            <kbd class="hot">⏎</kbd> save <kbd>esc</kbd> cancel
+            <kbd class="hot">⏎</kbd> or say <kbd class="hot">“save it”</kbd> <kbd>esc</kbd> cancel
           </span>
         </div>
+        <div class="countdown"></div>
       </div>
       <div class="toast glass">
         <svg class="tick" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.2 3.2L13 5" stroke="#ff5c39" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -361,6 +377,7 @@ export function createOverlay(): Overlay {
     interim: q('.interim'),
     chip: q('.chip'),
     where: q('.where'),
+    countdown: q('.countdown'),
     toast: q('.toast'),
   };
 }

@@ -1,9 +1,9 @@
 {
-  "name": "bug-recorder",
+  "name": "gripe",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Point, talk, ship. A Chrome extension that records what's wrong on a page as a markdown report your coding agent can read.",
+  "description": "Rant at your app, get a bug report. Point at what is broken, say what is wrong, hand the markdown to your coding agent.",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
     "build": "npm run icons && vite build && vite build --config vite.content.config.ts",

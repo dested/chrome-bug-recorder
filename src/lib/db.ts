@@ -7,6 +7,7 @@ import type { Note, Session } from './types';
  * clone, which is the only reason "remember my project folder" works at all.
  */
 
+// Renaming this would orphan every session already recorded — it stays.
 const DB_NAME = 'bug-recorder';
 const DB_VERSION = 1;
 

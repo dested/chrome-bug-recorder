@@ -6,10 +6,10 @@
  * the host page.
  */
 (() => {
-  if (window.__bugRecorderTap) return;
-  window.__bugRecorderTap = true;
+  if (window.__gripeTap) return;
+  window.__gripeTap = true;
 
-  const TAG = 'bug-recorder:page-event';
+  const TAG = 'gripe:page-event';
   const MAX_LEN = 2000;
 
   const send = (level, message, detail) => {

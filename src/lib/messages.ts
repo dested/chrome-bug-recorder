@@ -14,7 +14,8 @@ export type Request =
   | { type: 'note:delete'; id: string }
   | { type: 'note:written'; ids: string[] }
   | { type: 'state:get' }
-  | { type: 'arm'; mode: CaptureMode; tabId?: number };
+  | { type: 'arm'; mode: CaptureMode; tabId?: number }
+  | { type: 'disarm' };
 
 /** Background → content script. */
 export type ContentCommand =

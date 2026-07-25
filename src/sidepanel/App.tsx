@@ -180,6 +180,30 @@ export default function App() {
 
   const editShortcut = () => chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 
+  /**
+   * Clicking a button in here leaves keyboard focus in the side panel, and Chrome
+   * gives us no way to hand it back to the page. So the panel listens for the
+   * same keys and relays them — whichever side has focus, E/R/D/P work.
+   */
+  useEffect(() => {
+    const MODE_KEYS: Record<string, CaptureMode> = { e: 'element', r: 'region', d: 'draw', p: 'page' };
+    const onKey = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === 'Escape') {
+        void send({ type: 'disarm' });
+        return;
+      }
+      const mode = MODE_KEYS[event.key.toLowerCase()];
+      if (!mode) return;
+      event.preventDefault();
+      void send<{ ok: boolean }>({ type: 'arm', mode });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const switchSession = async (id: string) => {
     await send({ type: 'session:activate', id });
     setShowSessions(false);
@@ -225,7 +249,7 @@ export default function App() {
           <circle cx="8" cy="8" r="2.6" fill="#ff5c39" />
           <circle cx="8" cy="8" r="6.4" fill="none" stroke="#ff5c39" strokeWidth="2" />
         </svg>
-        <span className="wordmark">Bug Recorder</span>
+        <span className="wordmark">Gripe</span>
         <span className="spacer" />
         <span className="count">
           {state.notes.length} note{state.notes.length === 1 ? '' : 's'}
@@ -409,6 +433,7 @@ export default function App() {
         {(
           [
             ['autoDictate', 'auto-mic'],
+            ['autoSend', 'auto-send'],
             ['spotlight', 'spotlight'],
             ['chain', 'stay armed'],
           ] as const

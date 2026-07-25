@@ -116,7 +116,7 @@ export function buildReport(session: Session, notes: Note[]): string {
   out.push('---');
   out.push('');
   out.push(
-    `<sub>Recorded with [Bug Recorder](https://github.com/dested/chrome-bug-recorder). Machine-readable copy: \`notes.json\`.</sub>`,
+    `<sub>Recorded with [Gripe](https://github.com/dested/gripe). Machine-readable copy: \`notes.json\`.</sub>`,
   );
   out.push('');
   return out.join('\n');

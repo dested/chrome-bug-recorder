@@ -230,6 +230,11 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
       }
       case 'arm':
         return { ok: await arm(message.mode, message.tabId) };
+      case 'disarm': {
+        const tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+        if (tab?.id !== undefined) await tellTab(tab.id, { type: 'disarm' });
+        return { ok: true };
+      }
       default:
         return { ok: false };
     }

@@ -88,6 +88,10 @@ export interface Settings {
   spotlight: boolean;
   /** Stay armed after saving a note. */
   chain: boolean;
+  /** Save the note automatically once you stop talking. */
+  autoSend: boolean;
+  /** How long a silence counts as "done talking". */
+  autoSendMs: number;
   lang: string;
 }
 
@@ -95,7 +99,16 @@ export const DEFAULT_SETTINGS: Settings = {
   autoDictate: true,
   spotlight: true,
   chain: false,
+  autoSend: true,
+  autoSendMs: 3000,
   lang: '',
 };
+
+/**
+ * Say any of these and the note commits — no reaching for the keyboard. Matched
+ * against the end of the transcript and stripped before saving.
+ */
+export const SEND_PHRASES =
+  /\s*(?:and\s+)?(?:that'?s it|save it|save that|send it|log it|ship it|next note|end note|next)\s*[.!?]?\s*$/i;
 
 export const ACCENT = '#ff5c39';

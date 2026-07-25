@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Bug Recorder",
+  "name": "Gripe",
   "version": "0.1.0",
-  "description": "Point, talk, ship. Records what's wrong on a page as a markdown report your coding agent can read.",
+  "description": "Rant at your app, get a bug report. Point at what is broken, say what is wrong, hand the markdown to your coding agent.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "sidePanel", "downloads"],
   "host_permissions": ["<all_urls>"],
@@ -11,7 +11,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Bug Recorder — open panel",
+    "default_title": "Gripe — open panel",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png",

@@ -1,23 +1,23 @@
 import type { ContentCommand } from '../lib/messages';
 import type { CaptureMode, NoteDraft, PageEvent, Rect, Settings, TargetInfo } from '../lib/types';
-import { DEFAULT_SETTINGS } from '../lib/types';
+import { DEFAULT_SETTINGS, SEND_PHRASES } from '../lib/types';
 import { compose, type Stroke } from './capture';
 import { Dictation, speechSupported } from './speech';
 import { createOverlay, type Overlay } from './ui';
 
 declare global {
   interface Window {
-    __bugRecorderContent?: boolean;
+    __gripeContent?: boolean;
   }
 }
 
-if (!window.__bugRecorderContent) {
-  window.__bugRecorderContent = true;
+if (!window.__gripeContent) {
+  window.__gripeContent = true;
   boot();
 }
 
 function boot() {
-  const PAGE_EVENT = 'bug-recorder:page-event';
+  const PAGE_EVENT = 'gripe:page-event';
   const EVENT_WINDOW_MS = 3 * 60 * 1000;
   const MAX_EVENTS_PER_NOTE = 12;
 
@@ -35,6 +35,7 @@ function boot() {
   let drawing = false;
   let dictation: Dictation | null = null;
   let saving = false;
+  let sendTimer: number | null = null;
 
   let events: PageEvent[] = [];
   let lastNoteAt = 0;
@@ -250,6 +251,7 @@ function boot() {
   function disarm() {
     const o = ui();
     phase = 'idle';
+    cancelAutoSend();
     dictation?.stop();
     removeAimListeners();
     setCrosshair(false);
@@ -520,9 +522,13 @@ function boot() {
   }
 
   function wireComposer(o: Overlay) {
-    o.textarea.addEventListener('input', () => autoGrow(o.textarea));
+    o.textarea.addEventListener('input', () => {
+      autoGrow(o.textarea);
+      cancelAutoSend(); // typing means you're still composing
+    });
 
     o.textarea.addEventListener('keydown', (event) => {
+      cancelAutoSend();
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         void save();
@@ -545,7 +551,36 @@ function boot() {
   function toggleMic() {
     if (!dictation) return;
     dictation.toggle();
+    if (!dictation.listening) cancelAutoSend();
     ui().mic.classList.toggle('live', dictation.listening);
+  }
+
+  /**
+   * Reaching for Enter breaks the talk-and-point rhythm, so a note commits
+   * itself once you stop talking. The drain bar makes that visible and any
+   * further speech or keystroke calls it off.
+   */
+  function scheduleAutoSend() {
+    cancelAutoSend();
+    const o = ui();
+    if (!settings.autoSend || !dictation?.listening || !o.textarea.value.trim()) return;
+
+    o.countdown.style.transition = 'none';
+    o.countdown.style.width = '100%';
+    void o.countdown.offsetWidth; // force the reflow so the drain animates
+    o.countdown.classList.add('on');
+    o.countdown.style.transition = `width ${settings.autoSendMs}ms linear`;
+    o.countdown.style.width = '0%';
+    sendTimer = window.setTimeout(() => void save(), settings.autoSendMs);
+  }
+
+  function cancelAutoSend() {
+    if (sendTimer) window.clearTimeout(sendTimer);
+    sendTimer = null;
+    if (!overlay) return;
+    overlay.countdown.classList.remove('on');
+    overlay.countdown.style.transition = 'none';
+    overlay.countdown.style.width = '100%';
   }
 
   function startDictation() {
@@ -562,9 +597,18 @@ function boot() {
           o.textarea.value = value ? `${value.replace(/\s+$/, '')} ${text}` : text;
           o.interim.textContent = '';
           autoGrow(o.textarea);
+
+          // "…and that's it" — commit now, without the phrase itself.
+          if (SEND_PHRASES.test(o.textarea.value)) {
+            o.textarea.value = o.textarea.value.replace(SEND_PHRASES, '');
+            void save();
+            return;
+          }
+          scheduleAutoSend();
         },
         onInterim: (text) => {
           o.interim.textContent = text;
+          if (text) cancelAutoSend(); // still talking
         },
         onState: (state, detail) => {
           o.mic.classList.toggle('live', state === 'listening');
@@ -613,6 +657,7 @@ function boot() {
   async function save() {
     if (saving) return;
     saving = true;
+    cancelAutoSend();
     const o = ui();
     const text = o.textarea.value.trim();
     dictation?.stop();

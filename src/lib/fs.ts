@@ -23,7 +23,7 @@ declare global {
   }
 }
 
-export const REPORT_DIR = 'bug-reports';
+export const REPORT_DIR = 'gripes';
 const DIR_KEY = 'projectDir';
 
 export function fsaSupported(): boolean {
