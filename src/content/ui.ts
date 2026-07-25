@@ -45,16 +45,48 @@ const CSS = `
   transform: translateX(-50%) translateY(-6px);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 14px 9px 12px;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
   border-radius: 999px;
   font-size: 12.5px;
   letter-spacing: 0.01em;
   white-space: nowrap;
   opacity: 0;
+  pointer-events: none;
   transition: opacity .14s ease, transform .14s ease;
 }
-.hint.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+.hint.on { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+/* Dodge to the bottom when the cursor goes for the page's own header. */
+.hint.low { top: auto; bottom: 22px; }
+
+.tools { display: flex; gap: 3px; }
+.tools button {
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+.tools button:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.tools button.on { background: rgba(255,92,57,.18); color: #ffcbbb; }
+.tools .k { text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.exit {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color .12s ease;
+}
+.exit:hover { color: var(--text); }
 .hint .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--accent);
@@ -236,7 +268,8 @@ export interface Overlay {
   layer: HTMLElement;
   hint: HTMLElement;
   hintText: HTMLElement;
-  hintKeys: HTMLElement;
+  tools: HTMLElement;
+  exit: HTMLElement;
   highlight: HTMLElement;
   tag: HTMLElement;
   surface: HTMLElement;
@@ -275,7 +308,13 @@ export function createOverlay(): Overlay {
         <span class="dot"></span>
         <span class="hint-text"></span>
         <span class="sep"></span>
-        <span class="keys hint-keys"></span>
+        <div class="tools">
+          <button data-mode="element"><span class="k">E</span>lement</button>
+          <button data-mode="region"><span class="k">R</span>egion</button>
+          <button data-mode="draw"><span class="k">D</span>raw</button>
+          <button data-mode="page"><span class="k">P</span>age</button>
+        </div>
+        <button class="exit">esc</button>
       </div>
       <div class="bar glass">
         <div class="bar-top">
@@ -309,7 +348,8 @@ export function createOverlay(): Overlay {
     layer,
     hint: q('.hint'),
     hintText: q('.hint-text'),
-    hintKeys: q('.hint-keys'),
+    tools: q('.tools'),
+    exit: q('.exit'),
     highlight: q('.highlight'),
     tag: q('.tag'),
     surface: q('.surface'),
@@ -324,5 +364,3 @@ export function createOverlay(): Overlay {
     toast: q('.toast'),
   };
 }
-
-export const KEY_HINTS = `<kbd>E</kbd> element <kbd>R</kbd> region <kbd>D</kbd> draw <kbd>P</kbd> page <kbd>esc</kbd> exit`;

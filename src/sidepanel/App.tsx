@@ -18,7 +18,7 @@ import {
 } from '../lib/fs';
 import { agentPrompt, buildNotesJson, buildReport } from '../lib/markdown';
 import { blobBytes, makeZip, textBytes } from '../lib/zip';
-import { clockTime, shortUrl } from '../lib/format';
+import { clockTime, dateTime, shortUrl } from '../lib/format';
 
 interface PanelState {
   sessions: Session[];
@@ -38,6 +38,8 @@ export default function App() {
   const [editing, setEditing] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [shortcut, setShortcut] = useState('');
+  const [showSessions, setShowSessions] = useState(false);
   const flushing = useRef(false);
 
   const session = useMemo(
@@ -61,6 +63,14 @@ export default function App() {
   useEffect(() => {
     setName(session?.name ?? '');
   }, [session?.id, session?.name]);
+
+  // Ask Chrome what the shortcut actually is — it differs per OS and the user
+  // may have rebound it.
+  useEffect(() => {
+    void chrome.commands
+      .getAll()
+      .then((commands) => setShortcut(commands.find((c) => c.name === 'arm-element')?.shortcut ?? ''));
+  }, []);
 
   // ── project folder ────────────────────────────────────────────────────
   useEffect(() => {
@@ -158,11 +168,22 @@ export default function App() {
   }, [expanded, fullShots]);
 
   // ── actions ───────────────────────────────────────────────────────────
-  const arm = (mode: CaptureMode) => send({ type: 'arm', mode });
-
   const say = (text: string) => {
     setFlash(text);
     window.setTimeout(() => setFlash(null), 1700);
+  };
+
+  const arm = async (mode: CaptureMode) => {
+    const result = await send<{ ok: boolean }>({ type: 'arm', mode });
+    if (!result?.ok) say("can't record on this page");
+  };
+
+  const editShortcut = () => chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+
+  const switchSession = async (id: string) => {
+    await send({ type: 'session:activate', id });
+    setShowSessions(false);
+    await refresh();
   };
 
   const copyPrompt = async () => {
@@ -213,15 +234,53 @@ export default function App() {
       </header>
 
       <div className="session">
-        <input
-          value={name}
-          placeholder="Untitled session"
-          onChange={(e) => setName(e.target.value)}
-          onBlur={(e) => void renameSession(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        />
+        <div className="session-row">
+          <input
+            value={name}
+            placeholder="Untitled session"
+            onChange={(e) => setName(e.target.value)}
+            onBlur={(e) => void renameSession(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          />
+          <button
+            className={`chev ${showSessions ? 'open' : ''}`}
+            title="Switch session"
+            onClick={() => setShowSessions((v) => !v)}
+          >
+            {state.sessions.length > 1 ? `${state.sessions.length} ▾` : '▾'}
+          </button>
+        </div>
         <div className="sub">{session ? `${REPORT_DIR}/${session.slug}` : 'starts on your first note'}</div>
       </div>
+
+      {showSessions && (
+        <div className="sessions">
+          {!state.sessions.length && <div className="srow-empty">no sessions yet</div>}
+          {state.sessions.map((s) => (
+            <div
+              key={s.id}
+              className={`srow ${s.id === state.activeSessionId ? 'on' : ''}`}
+              onClick={() => void switchSession(s.id)}
+            >
+              <div className="sname">{s.name}</div>
+              <div className="smeta">
+                {s.noteCount} note{s.noteCount === 1 ? '' : 's'} · {dateTime(s.createdAt)}
+              </div>
+              <button
+                className="kill"
+                title="Forget this session (files on disk are kept)"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await send({ type: 'session:delete', id: s.id });
+                  await refresh();
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="folder">
         <span className={`status ${folderReady ? 'ok' : dir ? 'warn' : ''}`} />
@@ -255,20 +314,23 @@ export default function App() {
       </div>
 
       <div className="controls">
-        <button className="arm" onClick={() => arm('element')}>
-          Point &amp; record <kbd>⌥⇧B</kbd>
+        <button className="arm" onClick={() => void arm('element')}>
+          Point &amp; record {shortcut && <kbd>{shortcut}</kbd>}
         </button>
         <div className="modes">
-          <button className="mode" onClick={() => arm('region')}>
+          <button className="mode" onClick={() => void arm('region')}>
             Region
           </button>
-          <button className="mode" onClick={() => arm('draw')}>
+          <button className="mode" onClick={() => void arm('draw')}>
             Draw
           </button>
-          <button className="mode" onClick={() => arm('page')}>
+          <button className="mode" onClick={() => void arm('page')}>
             Page
           </button>
         </div>
+        <button className="hintline" onClick={editShortcut}>
+          {shortcut ? `${shortcut} works anywhere · change it` : 'no shortcut bound — set one'}
+        </button>
       </div>
 
       <div className="notes">
@@ -276,9 +338,9 @@ export default function App() {
           <div className="empty">
             Nothing recorded yet.
             <br />
-            Hit <b>⌥⇧B</b> on the page, click what's wrong,
+            Hit <b>{shortcut || 'the shortcut'}</b> on the page,
             <br />
-            and just say it.
+            click what's wrong, and just say it.
           </div>
         )}
         {state.notes.map((note) => (

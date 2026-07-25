@@ -42,23 +42,33 @@ select the `dist/` folder. Pin the extension and click it to open the side panel
 
 ## Use it
 
-| Key | What happens |
-| --- | --- |
-| <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | Arm the element picker |
-| <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | Quick note about the whole page |
-| <kbd>E</kbd> <kbd>R</kbd> <kbd>D</kbd> <kbd>P</kbd> | While armed: element / region / draw / page |
-| <kbd>Enter</kbd> | Save the note |
-| <kbd>Ctrl</kbd>+<kbd>Space</kbd> | Toggle the mic |
-| <kbd>Esc</kbd> | Bail out |
+| Key (Windows / Linux) | macOS | What happens |
+| --- | --- | --- |
+| <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>B</kbd> | Arm the element picker |
+| <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | <kbd>⌥</kbd><kbd>⇧</kbd><kbd>N</kbd> | Quick note about the whole page |
+| <kbd>E</kbd> <kbd>R</kbd> <kbd>D</kbd> <kbd>P</kbd> | same | While armed: element / region / draw / page |
+| <kbd>Enter</kbd> | same | Save the note |
+| <kbd>Ctrl</kbd>+<kbd>Space</kbd> | same | Toggle the mic |
+| <kbd>Alt</kbd>+click | <kbd>⌥</kbd>+click | Take the *literal* element under the cursor, no climbing |
+| <kbd>Esc</kbd> | same | Bail out |
 
-The flow that matters: **⌥⇧B → click the broken thing → talk → Enter.** Repeat. The mic
-starts on its own, keeps listening through pauses, and the text lands in the composer as
-you speak — edit it by typing if a word comes out wrong.
+The side panel always shows the shortcut Chrome actually bound on your machine — click
+that line to rebind it at `chrome://extensions/shortcuts`.
+
+The flow that matters: **shortcut → click the broken thing → talk → Enter.** Repeat. The
+mic starts on its own, keeps listening through pauses, and the text lands in the composer
+as you speak — edit it by typing if a word comes out wrong.
+
+The floating toolbar is clickable, not just a keyboard legend — tap **Element / Region /
+Draw / Page** to switch mid-note. (Keyboard letters only reach the page when the page has
+focus, which it doesn't right after you click a button in the side panel.) It dodges to
+the bottom of the screen when your cursor goes for the site's own header.
 
 Four ways to point:
 
 - **Element** — hover-highlights DOM nodes; the report gets the CSS selector, the visible
-  text, `data-testid`/`aria-label`, and the opening tag.
+  text, `data-testid`/`aria-label`, and the opening tag. Clicking a button's inner label
+  selects the *button*, not the throwaway `<span>` — hold <kbd>Alt</kbd> to override.
 - **Region** — drag a box for things that aren't one element (spacing, alignment).
 - **Draw** — scribble arrows and circles right on the page.
 - **Page** — no target, just a note about what you're looking at.
@@ -70,6 +80,13 @@ restarts (you'll re-approve once per browser session). After that, every note is
 to disk the instant you save it — the report is complete even if the browser dies.
 
 No folder connected? Everything still records, and **.zip** in the footer downloads it.
+
+### Sessions
+
+Every session you've ever recorded is kept. Click the **▾** next to the session name to
+switch back to an old one — new notes append to it and `report.md` is rewritten in place.
+**+** in the footer starts a fresh one. Forgetting a session from the list drops it from
+the extension but leaves the files on disk alone.
 
 ### Handing it off
 

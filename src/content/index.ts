@@ -3,7 +3,7 @@ import type { CaptureMode, NoteDraft, PageEvent, Rect, Settings, TargetInfo } fr
 import { DEFAULT_SETTINGS } from '../lib/types';
 import { compose, type Stroke } from './capture';
 import { Dictation, speechSupported } from './speech';
-import { createOverlay, KEY_HINTS, type Overlay } from './ui';
+import { createOverlay, type Overlay } from './ui';
 
 declare global {
   interface Window {
@@ -160,6 +160,7 @@ function boot() {
     document.documentElement.appendChild(overlay.host);
     wireComposer(overlay);
     wireSurface(overlay);
+    wireToolbar(overlay);
     return overlay;
   }
 
@@ -185,11 +186,37 @@ function boot() {
     page: 'Note about this page',
   };
 
+  /**
+   * The toolbar has to be clickable, not just a keyboard legend: arming from the
+   * side panel leaves keyboard focus in the panel, so the E/R/D/P keys never
+   * reach the page until you've clicked into it.
+   */
+  function wireToolbar(o: Overlay) {
+    for (const button of Array.from(o.tools.querySelectorAll('button'))) {
+      button.addEventListener('mousedown', (event) => event.preventDefault());
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = button.dataset.mode as CaptureMode | undefined;
+        if (next) arm(next);
+      });
+    }
+    o.exit.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      disarm();
+    });
+  }
+
   function paintHint() {
     const o = ui();
     o.hintText.textContent = HINTS[mode];
-    o.hintKeys.innerHTML = KEY_HINTS;
-    o.hint.classList.toggle('on', phase === 'aiming');
+    for (const button of Array.from(o.tools.querySelectorAll('button'))) {
+      button.classList.toggle('on', button.dataset.mode === mode);
+    }
+    o.hint.classList.toggle('on', phase !== 'idle');
+    // The composer owns the bottom of the screen once it's open.
+    if (phase !== 'aiming') o.hint.classList.remove('low');
   }
 
   function arm(next: CaptureMode) {
@@ -201,6 +228,14 @@ function boot() {
     o.highlight.classList.remove('on', 'locked');
     o.tag.classList.remove('on');
     paintHint();
+
+    // Pull keyboard focus to the page so the E/R/D/P keys work even when the
+    // user armed from the side panel.
+    try {
+      window.focus();
+    } catch {
+      /* not permitted in some embeds */
+    }
 
     const needsSurface = mode === 'region' || mode === 'draw';
     o.surface.classList.toggle('on', needsSurface);
@@ -267,15 +302,48 @@ function boot() {
     });
   }
 
-  function elementUnder(x: number, y: number): Element | null {
+  /** Tags that are almost never what you meant to point at. */
+  const PRESENTATIONAL = new Set([
+    'SPAN', 'EM', 'STRONG', 'B', 'I', 'U', 'SMALL', 'CODE', 'FONT',
+    'SVG', 'PATH', 'G', 'CIRCLE', 'RECT', 'LINE', 'POLYGON', 'USE', 'IMG', 'PICTURE',
+  ]);
+  const INTERACTIVE =
+    'button, a, label, summary, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [data-testid]';
+
+  /**
+   * elementFromPoint gives you the topmost node, which for a button is usually
+   * the <span> holding its label — a useless selector. Climb to the thing a
+   * human would name, unless Alt is held to take the literal hit.
+   */
+  function refine(el: Element): Element {
+    let node = el;
+    for (let depth = 0; depth < 4; depth++) {
+      const parent = node.parentElement;
+      if (!parent || parent === document.body) break;
+      const throwaway =
+        PRESENTATIONAL.has(node.tagName.toUpperCase()) && !node.id && !node.getAttribute('data-testid');
+      if (!throwaway && !parent.matches(INTERACTIVE)) break;
+      const child = node.getBoundingClientRect();
+      const box = parent.getBoundingClientRect();
+      // Don't swallow the whole page to gain one wrapper.
+      if (box.width * box.height > Math.max(child.width * child.height, 1) * 10) break;
+      node = parent;
+    }
+    return node;
+  }
+
+  function elementUnder(x: number, y: number, literal = false): Element | null {
     const el = document.elementFromPoint(x, y);
     if (!el || el === overlay?.host || el === document.documentElement || el === document.body) return null;
-    return el;
+    return literal ? el : refine(el);
   }
 
   function onMouseMove(event: MouseEvent) {
-    if (phase !== 'aiming' || mode !== 'element' || inOverlay(event)) return;
-    const el = elementUnder(event.clientX, event.clientY);
+    if (phase !== 'aiming') return;
+    // Get out of the way when the cursor comes for the site's own header.
+    if (!inOverlay(event)) ui().hint.classList.toggle('low', event.clientY < 96);
+    if (mode !== 'element' || inOverlay(event)) return;
+    const el = elementUnder(event.clientX, event.clientY, event.altKey);
     if (!el || el === hoverEl) return;
     hoverEl = el;
     positionHighlight(el.getBoundingClientRect(), selectorFor(el), false);
@@ -292,7 +360,7 @@ function boot() {
     if (phase !== 'aiming' || mode !== 'element' || inOverlay(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    const el = elementUnder(event.clientX, event.clientY);
+    const el = elementUnder(event.clientX, event.clientY, event.altKey);
     if (!el) return;
     lockedEl = el;
     lockedTarget = describe(el);
@@ -514,8 +582,8 @@ function boot() {
   function openComposer() {
     const o = ui();
     phase = 'composing';
-    o.hint.classList.remove('on');
     setCrosshair(false);
+    paintHint(); // toolbar stays up so you can switch modes mid-note
 
     o.chip.textContent = mode;
     o.where.classList.remove('warn');
