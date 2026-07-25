@@ -1,5 +1,5 @@
 import type { Note, Session } from './types';
-import { clockTime, dateTime, originOf, shortUrl, truncate } from './format';
+import { clockTime, dateTime, hhmm, originOf, shortUrl, truncate } from './format';
 
 /**
  * The whole point of this extension is this file. It is written for a coding
@@ -63,7 +63,7 @@ export function buildReport(session: Session, notes: Note[]): string {
   out.push(`# Bug report — ${session.name}`);
   out.push('');
   out.push(
-    `\`${notes.length} note${notes.length === 1 ? '' : 's'}\` · recorded ${dateTime(first)}–${clockTime(last)} · ${origin}`,
+    `\`${notes.length} note${notes.length === 1 ? '' : 's'}\` · recorded ${dateTime(first)}–${hhmm(last)} · ${origin}`,
   );
   out.push('');
   out.push(PREAMBLE);
