@@ -286,6 +286,50 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         await broadcast();
         return { ok: true };
       }
+      case 'recording:frame:delete': {
+        const session = await getSession(message.id);
+        if (!session?.recording) return { ok: false };
+        await blobs.delete(`${message.id}:frame:${message.index}`);
+        const rec = session.recording;
+        // Frames are not renumbered — same rule as notes; the file on disk is kept.
+        await putSession({
+          ...session,
+          recording: {
+            ...rec,
+            frames: rec.frames.filter((f) => f.index !== message.index),
+            written: false,
+          },
+        });
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:line:update': {
+        const session = await getSession(message.id);
+        if (!session?.recording) return { ok: false };
+        const rec = session.recording;
+        const text = message.text.trim();
+        const transcript = text
+          ? rec.transcript.map((s, i) => (i === message.index ? { ...s, text } : s))
+          : rec.transcript.filter((_, i) => i !== message.index); // emptied = deleted
+        await putSession({ ...session, recording: { ...rec, transcript, written: false } });
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:line:delete': {
+        const session = await getSession(message.id);
+        if (!session?.recording) return { ok: false };
+        const rec = session.recording;
+        await putSession({
+          ...session,
+          recording: {
+            ...rec,
+            transcript: rec.transcript.filter((_, i) => i !== message.index),
+            written: false,
+          },
+        });
+        await broadcast();
+        return { ok: true };
+      }
       case 'recording:event':
         // The side panel consumes these via its own onMessage listener; the
         // background only needs to not treat them as unknown.

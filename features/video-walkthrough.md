@@ -17,10 +17,17 @@ dedup and contact-sheet methods (see `decisions.md`).
   tab, window, or full screen, their choice. Refusing it flashes `screen share refused`.
 - While recording, the controls strip becomes a HUD: pulsing accent dot, mono elapsed clock, live
   frame/line counts, the interim transcript line, and an inverted **Stop** button.
-- The mic is acquired for real at start (`getUserMedia` — also the only way SpeechRecognition gets a
-  permission prompt from an extension page) and its track is mixed into the webm, so the raw video
-  carries the narration. If blocked, the HUD reads `microphone blocked — recording without
-  narration` and the recording continues silent, without a transcript.
+- The mic is acquired for real at start and its track is mixed into the webm, so the raw video
+  carries the narration. **Chrome cannot show the mic prompt inside a side panel** (getUserMedia
+  rejects without asking), so Record first checks `navigator.permissions`; if not granted it opens
+  `micperm.html` in a tab — prompts work there, the grant sticks for the extension origin, and the
+  page surfaces the real error on failure (including the macOS System Settings → Microphone case).
+  Pressing Record again records regardless; if still blocked the HUD shows a clickable
+  `microphone blocked — no narration this time · fix it`.
+- Recordings are editable after the fact: hover-✕ deletes a keyframe (blob gone, file on disk kept,
+  no renumbering — same rule as notes), clicking a transcript line edits it inline, ✕ deletes it,
+  emptying a line deletes it. Every edit flips `written: false`, so report.md, MANIFEST.txt,
+  recording.json, and the grids are rebuilt on disk automatically.
 - Every 500ms the stream is reduced to a **16×16 RGB signature**; a frame is kept iff more than
   **8% of pixels changed** (a pixel counts as changed when any channel moves >25) versus the closest
   of the **last 4 kept frames** — so an A-B-A tab flip doesn't re-capture A. No forced keyframes: a

@@ -570,6 +570,15 @@ kbd {
 .rec-interim.warn {
   color: #ffcbbb;
 }
+button.rec-interim {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0;
+}
+button.rec-interim:hover {
+  text-decoration: underline;
+}
 
 .rec-sum {
   padding: 10px 14px;
@@ -625,6 +634,58 @@ kbd {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--faint);
+}
+.rframe .kill {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  opacity: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--faint);
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.65);
+}
+.rframe:hover .kill {
+  opacity: 1;
+}
+.rframe .kill:hover {
+  color: var(--accent);
+}
+.rec-script .line {
+  position: relative;
+  padding-right: 30px;
+}
+.rec-script .line .txt {
+  cursor: text;
+}
+.rec-script .line input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 5px;
+  padding: 2px 6px;
+  caret-color: var(--accent);
+}
+.rec-script .line .kill {
+  position: absolute;
+  right: 10px;
+  top: 3px;
+  opacity: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--faint);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.rec-script .line:hover .kill {
+  opacity: 1;
+}
+.rec-script .line .kill:hover {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 @keyframes pulse {

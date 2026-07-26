@@ -21,6 +21,9 @@ export type Request =
   | { type: 'recording:add'; id: string; name: string; origin: string; meta: RecordingMeta }
   | { type: 'recording:setActive'; active: boolean }
   | { type: 'recording:written'; id: string }
+  | { type: 'recording:frame:delete'; id: string; index: number }
+  | { type: 'recording:line:update'; id: string; index: number; text: string }
+  | { type: 'recording:line:delete'; id: string; index: number }
   // Content script → panel, relayed while a recording is live.
   | { type: 'recording:event'; event: PageEvent };
 

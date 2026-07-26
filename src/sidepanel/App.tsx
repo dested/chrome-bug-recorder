@@ -55,11 +55,13 @@ export default function App() {
   const [stopping, setStopping] = useState(false);
   const [expandedFrame, setExpandedFrame] = useState<number | null>(null);
   const [frameUrls, setFrameUrls] = useState<Record<number, string>>({});
+  const [editingLine, setEditingLine] = useState<number | null>(null);
   const flushing = useRef(false);
   const recorderRef = useRef<Recorder | null>(null);
   const flushingRec = useRef(false);
   // The Stop button and Chrome's own "Stop sharing" bar can both fire.
   const stopGuard = useRef(false);
+  const micTabOpened = useRef(false);
 
   const session = useMemo(
     () => state.sessions.find((s) => s.id === state.activeSessionId) ?? null,
@@ -271,8 +273,30 @@ export default function App() {
     }
   };
 
+  /**
+   * The side panel can't render the getUserMedia prompt — it rejects without
+   * ever asking. First Record press without a granted mic opens micperm.html
+   * in a tab (prompts work there); a second press records anyway, silent.
+   */
+  const ensureMic = async (): Promise<boolean> => {
+    try {
+      const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+      if (status.state === 'granted') return true;
+    } catch {
+      return true; // no Permissions API — let getUserMedia decide
+    }
+    if (!micTabOpened.current) {
+      micTabOpened.current = true;
+      await chrome.tabs.create({ url: chrome.runtime.getURL('micperm.html') });
+      say('grant the mic in the new tab, then hit Record');
+      return false;
+    }
+    return true;
+  };
+
   const startRecording = async () => {
     if (recorderRef.current) return;
+    if (!(await ensureMic())) return;
     const r = new Recorder({ onUpdate: setRecUpdate, onEnd: () => void stopRecording() }, state.settings.lang);
     try {
       await r.start();
@@ -498,11 +522,19 @@ export default function App() {
               {stopping ? 'saving…' : 'Stop'}
             </button>
           </div>
-          <div className={`rec-interim ${recUpdate.micState === 'denied' ? 'warn' : ''}`}>
-            {recUpdate.micState === 'denied'
-              ? 'microphone blocked — recording without narration'
-              : recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
-          </div>
+          {recUpdate.micState === 'denied' ? (
+            <button
+              className="rec-interim warn"
+              title="Open the permission page in a tab"
+              onClick={() => void chrome.tabs.create({ url: chrome.runtime.getURL('micperm.html') })}
+            >
+              microphone blocked — no narration this time · fix it
+            </button>
+          ) : (
+            <div className="rec-interim">
+              {recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
+            </div>
+          )}
         </div>
       ) : (
         <div className="controls">
@@ -544,6 +576,18 @@ export default function App() {
               >
                 {frameUrls[f.index] && <img src={frameUrls[f.index]} alt="" />}
                 <span className="rtime">{mmss(f.t)}</span>
+                <button
+                  className="kill"
+                  title="Delete frame (file on disk is kept)"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (expandedFrame === f.index) setExpandedFrame(null);
+                    await send({ type: 'recording:frame:delete', id: session!.id, index: f.index });
+                    await refresh();
+                  }}
+                >
+                  ×
+                </button>
               </div>
             ))}
           </div>
@@ -557,7 +601,39 @@ export default function App() {
               {rec.transcript.map((s, i) => (
                 <div className="line" key={i}>
                   <span className="at">{mmss(s.t)}</span>
-                  <span>{s.text}</span>
+                  {editingLine === i ? (
+                    <input
+                      autoFocus
+                      defaultValue={s.text}
+                      onBlur={async (e) => {
+                        setEditingLine(null);
+                        if (e.target.value !== s.text) {
+                          await send({
+                            type: 'recording:line:update',
+                            id: session!.id,
+                            index: i,
+                            text: e.target.value,
+                          });
+                          await refresh();
+                        }
+                      }}
+                      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                    />
+                  ) : (
+                    <span className="txt" onClick={() => setEditingLine(i)}>
+                      {s.text}
+                    </span>
+                  )}
+                  <button
+                    className="kill"
+                    title="Delete line"
+                    onClick={async () => {
+                      await send({ type: 'recording:line:delete', id: session!.id, index: i });
+                      await refresh();
+                    }}
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>

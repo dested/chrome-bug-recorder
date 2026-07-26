@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Gripe — microphone</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0a0a0c; color: #f2efec; font: 13px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .card { max-width: 400px; padding: 28px 30px; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; background: #131316; }
+  .mark { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .mark span { font-size: 10.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: rgba(242,239,236,.5); }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  p { margin: 6px 0; color: rgba(242,239,236,.5); }
+  b { color: #f2efec; font-weight: 600; }
+  .err { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: #ffcbbb; }
+  .ok { color: #58c98a; }
+  button { font: inherit; margin-top: 12px; margin-right: 7px; padding: 8px 14px; border-radius: 8px; border: 0; cursor: pointer; background: #f2efec; color: #0a0a0c; font-weight: 650; font-size: 12.5px; }
+  button.ghost { background: none; border: 1px solid rgba(255,255,255,.08); color: rgba(242,239,236,.5); }
+  button.ghost:hover { color: #f2efec; border-color: rgba(255,255,255,.14); }
+  .state { display: none; }
+  [data-state="asking"] .asking, [data-state="granted"] .granted, [data-state="denied"] .denied { display: block; }
+</style>
+</head>
+<body data-state="asking">
+  <div class="card">
+    <div class="mark">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.6" fill="#ff5c39"/><circle cx="8" cy="8" r="6.4" fill="none" stroke="#ff5c39" stroke-width="2"/></svg>
+      <span>Gripe</span>
+    </div>
+    <div class="state asking">
+      <h1>one-time microphone permission</h1>
+      <p>chrome can't show this prompt inside the side panel, so it happens here instead. say yes and your walkthroughs carry the narration.</p>
+    </div>
+    <div class="state granted">
+      <h1 class="ok">mic granted</h1>
+      <p>close this tab and hit <b>Record</b> in the panel.</p>
+    </div>
+    <div class="state denied">
+      <h1>microphone blocked</h1>
+      <p>chrome said: <span class="err" id="err"></span></p>
+      <p>allow the mic for this extension in site settings, then try again. on a mac, also check <b>System Settings → Privacy &amp; Security → Microphone → Chrome</b> — if chrome itself has no mic access, no site can.</p>
+      <button id="retry">try again</button>
+      <button id="settings" class="ghost">open mic settings</button>
+    </div>
+  </div>
+  <script src="micperm.js"></script>
+</body>
+</html>
