@@ -280,7 +280,9 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
       }
       case 'recording:written': {
         const session = await getSession(message.id);
-        if (session?.recording) {
+        // Only mark written if nothing mutated since that flush started — a stale
+        // rev means the disk holds older content and the effect must run again.
+        if (session?.recording && (session.recording.rev ?? 0) === message.rev) {
           await putSession({ ...session, recording: { ...session.recording, written: true } });
         }
         await broadcast();
@@ -297,6 +299,7 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
           recording: {
             ...rec,
             frames: rec.frames.filter((f) => f.index !== message.index),
+            rev: (rec.rev ?? 0) + 1,
             written: false,
           },
         });
@@ -311,7 +314,10 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         const transcript = text
           ? rec.transcript.map((s, i) => (i === message.index ? { ...s, text } : s))
           : rec.transcript.filter((_, i) => i !== message.index); // emptied = deleted
-        await putSession({ ...session, recording: { ...rec, transcript, written: false } });
+        await putSession({
+          ...session,
+          recording: { ...rec, transcript, rev: (rec.rev ?? 0) + 1, written: false },
+        });
         await broadcast();
         return { ok: true };
       }
@@ -324,6 +330,24 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
           recording: {
             ...rec,
             transcript: rec.transcript.filter((_, i) => i !== message.index),
+            rev: (rec.rev ?? 0) + 1,
+            written: false,
+          },
+        });
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:transcript': {
+        const session = await getSession(message.id);
+        if (!session?.recording) return { ok: false };
+        const rec = session.recording;
+        await putSession({
+          ...session,
+          recording: {
+            ...rec,
+            transcript: message.transcript,
+            transcriber: 'whisper',
+            rev: (rec.rev ?? 0) + 1,
             written: false,
           },
         });

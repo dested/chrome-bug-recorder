@@ -1,16 +1,18 @@
 {
   "name": "gripe",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Rant at your app, get a bug report. Point at what is broken, say what is wrong, hand the markdown to your coding agent.",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
-    "build": "npm run icons && vite build && vite build --config vite.content.config.ts",
-    "dev": "npm run icons && vite build --watch",
+    "ort": "node scripts/copy-ort.mjs",
+    "build": "npm run icons && npm run ort && vite build && vite build --config vite.content.config.ts && node scripts/prune-dist.mjs",
+    "dev": "npm run icons && npm run ort && vite build --watch",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

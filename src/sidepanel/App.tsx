@@ -30,6 +30,7 @@ import { blobBytes, makeZip, textBytes } from '../lib/zip';
 import { clockTime, dateTime, mmss, shortUrl } from '../lib/format';
 import { Recorder, type RecorderUpdate } from './recorder';
 import { makeGrids, type GridFrame } from './grids';
+import { transcribeRecording, type TranscribeProgress } from './transcribe';
 
 interface PanelState {
   sessions: Session[];
@@ -56,6 +57,9 @@ export default function App() {
   const [expandedFrame, setExpandedFrame] = useState<number | null>(null);
   const [frameUrls, setFrameUrls] = useState<Record<number, string>>({});
   const [editingLine, setEditingLine] = useState<number | null>(null);
+  const [whisper, setWhisper] = useState<TranscribeProgress | null>(null);
+  // Session id of the pass in flight — doubles as the "only one at a time" guard.
+  const whispering = useRef<string | null>(null);
   const flushing = useRef(false);
   const recorderRef = useRef<Recorder | null>(null);
   const flushingRec = useRef(false);
@@ -183,7 +187,7 @@ export default function App() {
           .map((f) => ({ blob: frames.get(f.index), label: f.file.split('/').pop()! }))
           .filter((g): g is GridFrame => Boolean(g.blob));
         await writeRecordingSession(dir, session, frames, video, await makeGrids(gridFrames));
-        await send({ type: 'recording:written', id: session.id });
+        await send({ type: 'recording:written', id: session.id, rev: rec.rev ?? 0 });
         await refresh();
       } catch (error) {
         setFlash(`write failed: ${String(error).slice(0, 60)}`);
@@ -254,6 +258,28 @@ export default function App() {
     if (!result?.ok) say("can't record on this page");
   };
 
+  /**
+   * Runs after the session is already saved, never before: on success it swaps in
+   * the Whisper lines and flips `written` back to false so the flush effect
+   * rewrites the folder. Fail or close the panel and the Web Speech lines stand.
+   */
+  const runWhisper = async (id: string) => {
+    if (whispering.current) return;
+    whispering.current = id;
+    try {
+      const video = await blobs.get(`${id}:video`);
+      if (!video) return;
+      const segments = await transcribeRecording(video, setWhisper);
+      if (segments?.length) {
+        await send({ type: 'recording:transcript', id, transcript: segments });
+        await refresh();
+      }
+    } finally {
+      whispering.current = null;
+      setWhisper(null);
+    }
+  };
+
   const stopRecording = async () => {
     const r = recorderRef.current;
     if (!r || stopGuard.current) return;
@@ -265,6 +291,7 @@ export default function App() {
       await send({ type: 'recording:add', id: r.sessionId, name: 'Walkthrough', origin: '', meta });
       say('walkthrough saved');
       await refresh();
+      void runWhisper(r.sessionId).catch(() => {});
     } finally {
       recorderRef.current = null;
       setRecUpdate(null);
@@ -567,6 +594,17 @@ export default function App() {
             {mmss(rec.durationMs)} · {rec.frames.length} keyframes · {rec.transcript.length} spoken lines
             {rec.events.length ? ` · ${rec.events.length} errors` : ''}
           </div>
+          {whisper && whispering.current === session!.id && (
+            <div className="rec-whisper">
+              {whisper.stage === 'decode'
+                ? 'reading audio…'
+                : whisper.stage === 'transcribe'
+                  ? 'transcribing narration…'
+                  : whisper.stage === 'model'
+                    ? 'loading model…'
+                    : `fetching whisper model — ${Math.round(whisper.pct)}%`}
+            </div>
+          )}
           <div className="rec-frames">
             {rec.frames.map((f) => (
               <div

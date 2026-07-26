@@ -4,6 +4,38 @@
 > Newest first. Entries dated 2026-07-25 were backfilled on 2026-07-26 by reading the shipped code —
 > the reasoning is reconstructed from the code's own comments and structure.
 
+## 2026-07-26 — Dedup recalibrated for screens: 64×64 cells + absolute count (departs from the reference, with evidence)
+**Why:** a real MacBook recording (game dev page, 55s, 111 samples) kept exactly ONE frame. Running
+the same webm through the *original* claude-real-video tool reproduced it: 22 extracted → 1 kept,
+every reject scoring under 6% against its 8% bar. The reference's 16×16 percent-changed signature is
+tuned for full-frame video; on a screen recording the action lives in one region (game canvas,
+terminal pane) and 16×16 averages it to nothing. Measured on that recording, a 64×64 signature
+separates cleanly — gameplay = 13–178 changed cells, static screen = 0–3 — so the comparator is now
+64×64 RGB cells with a keep bar of >8 *cells* changed (tolerance 25 unchanged; window-of-4-kept,
+no forced keyframes, and 150-cap thinning all unchanged). This is a deliberate, evidence-backed
+departure from the port-exactly rule: the original method was run and failed on the actual content.
+**Rejected:** lowering the percent threshold at 16×16 (2% still missed the entire 3–19s gameplay
+stretch), per-region signatures (complexity; 64×64 counting already resolves sprite-scale motion).
+
+## 2026-07-26 — Transcription: on-device Whisper after Stop; Web Speech is only the live ticker
+**Why:** the same real recording produced a transcript the user called "way off" — Web Speech is a
+dictation API, not a transcription engine. Bake-off on that exact audio: Web Speech < Whisper base
+(the reference tool's default) < large-v3-turbo < **whisper-small.en (q8) via transformers.js** —
+which got every product-relevant line right ("slopes are fine", "the spring is totally broken",
+"piranha plants") with timestamps, at ~15s of CPU for a 55s clip. So the webm's mic track is
+transcribed *in the extension* right after Stop (user: "i don't care so much about real time…
+it just has to have perfect output"): transformers.js + onnx-community/whisper-small.en q8 in a
+worker, WebGPU with wasm fallback, ort wasm shipped in the bundle (`public/ort/`, gitignored,
+copied by `scripts/copy-ort.mjs`), ~250MB model fetched from huggingface.co on first use and cached
+by the browser. The session saves immediately with the Web Speech lines and Whisper replaces them
+when it lands (`recording:transcript` → `written:false` → files rewrite) — a failed or interrupted
+pass degrades to today's behavior instead of losing the recording.
+**Rejected:** shipping the reference's Python CLI alongside (its frame pass fails on screens, its
+whisper-base loses the bake-off, and it puts python+ffmpeg install burden on every machine),
+a cloud transcription API (key management + privacy in a local-first tool), Chrome's built-in
+Prompt API audio (availability gated on flags/hardware today), whisper large-v3-turbo (5× the
+download for a transcript that regressed on this clip: "slips are fine", "killing anybody").
+
 ## 2026-07-26 — Video walkthroughs distill live, with claude-real-video's methods ported exactly
 **Why:** the user explicitly wants the reference tool's logic, not an approximation — its dedup
 (16×16 RGB signatures, percent-of-changed-pixels >8 with channel tolerance 25, window of the last 4

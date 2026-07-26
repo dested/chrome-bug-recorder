@@ -8,6 +8,9 @@ import react from '@vitejs/plugin-react';
  */
 export default defineConfig({
   plugins: [react()],
+  // The transcription worker is loaded with {type:'module'} — make Vite emit it
+  // as ES explicitly instead of leaning on the IIFE default happening to work.
+  worker: { format: 'es' },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

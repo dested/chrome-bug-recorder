@@ -1,6 +1,7 @@
 node_modules/
 dist/
 public/icons/
+public/ort/
 *.zip
 bug-reports/
 .DS_Store

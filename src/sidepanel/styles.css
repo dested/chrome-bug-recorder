@@ -587,6 +587,15 @@ button.rec-interim:hover {
   font-size: 10.5px;
   color: var(--muted);
 }
+.rec-whisper {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
 .rec-frames {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

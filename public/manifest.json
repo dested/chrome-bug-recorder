@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Gripe",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Rant at your app, get a bug report. Point at what is broken, say what is wrong, hand the markdown to your coding agent.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "sidePanel", "downloads"],
   "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"

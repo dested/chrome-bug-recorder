@@ -254,6 +254,7 @@ export function buildRecordingJson(session: Session, rec: RecordingMeta): string
         durationMs: rec.durationMs,
         sampled: rec.sampled,
         video: rec.videoFile,
+        transcriber: rec.transcriber ?? 'webspeech',
         frames: rec.frames.map((f) => ({
           index: f.index,
           at: mmss(f.t),
@@ -276,13 +277,20 @@ export function buildRecordingJson(session: Session, rec: RecordingMeta): string
   );
 }
 
+/** Where the lines in transcript.txt came from — the agent should weigh them differently. */
+function transcriptSource(rec: RecordingMeta): string {
+  return rec.transcriber === 'whisper'
+    ? 'transcript.txt (Whisper small.en, on-device)'
+    : 'transcript.txt (live dictation, Web Speech)';
+}
+
 /** crv-style manifest: stats up top, transcript inline — the reference's MANIFEST.txt. */
 export function buildManifestTxt(session: Session, rec: RecordingMeta): string {
   const lines = [
     `source: screen recording — ${session.name}`,
     `duration: ${Math.round(rec.durationMs / 1000)}s | frames: ${rec.frames.length} (0.5s candidates + live dedup, deduped from ${rec.sampled} sampled)`,
     `frames dir: frames`,
-    `transcript: ${rec.transcript.length ? 'transcript.txt (live dictation, Web Speech)' : '(none — no narration was captured)'}`,
+    `transcript: ${rec.transcript.length ? transcriptSource(rec) : '(none — no narration was captured)'}`,
     '--- transcript ---',
     rec.transcript.length ? rec.transcript.map((s) => `[${mmss(s.t)}] ${s.text}`).join('\n') : '(none)',
   ];

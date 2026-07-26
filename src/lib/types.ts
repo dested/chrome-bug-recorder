@@ -85,7 +85,7 @@ export interface RecordingFrame {
   file: string;
   /** Why this frame survived dedup. */
   reason: 'start' | 'change';
-  /** Percent of pixels changed vs the closest of the last kept frames (absent on the first). */
+  /** Changed-cell count (of 64×64) vs the closest of the last kept frames (absent on the first). */
   dist?: number;
 }
 
@@ -96,6 +96,10 @@ export interface RecordingMeta {
   sampled: number;
   frames: RecordingFrame[];
   transcript: TranscriptSegment[];
+  /** Set when the on-device Whisper pass replaced the live Web Speech lines; absent = Web Speech or none. */
+  transcriber?: 'whisper';
+  /** Bumped on every content mutation; recording:written only sticks when its rev still matches. */
+  rev?: number;
   /** Console/network events forwarded by content scripts while recording. ts is absolute. */
   events: PageEvent[];
   videoFile: string;

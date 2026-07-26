@@ -2,6 +2,21 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-26 — 0.3.0: dedup that sees canvases + on-device Whisper
+Asked: real recording kept 1 keyframe of 111 sampled and the Web Speech transcript was way off;
+run the webm through the original crv tool; use "real tools" for perfect output. Found: the
+*original* tool also kept 1 of 22 (16×16/8% is blind to action confined to one screen region);
+transcript bake-off on the same audio ranked whisper-small.en (q8, transformers.js) above Whisper
+base AND large-v3-turbo. Done: dedup recalibrated to 64×64 cells, keep on >8 changed cells (84
+frames on the same recording, statics still skipped); post-stop on-device Whisper pass in a module
+worker (webgpu→wasm, ort wasm shipped at ort/, ~250MB model cached from HF on first use) that
+replaces the Web Speech lines via recording:transcript and rewrites the folder; rev token so a
+flush racing an edit/transcript can't mark stale files written; CSP + wasm-unsafe-eval; dist dup
+wasm pruned (23MB). Regenerated the user's session at gripes/…-walkthrough-FIXED as proof.
+Tagged v0.3.0. Touched: recorder.ts, transcribe.ts + transcribeWorker.ts (new), copy-ort.mjs +
+prune-dist.mjs (new), App.tsx, background, types/messages/markdown, manifest CSP, vite worker
+format, styles, kit docs.
+
 ## 2026-07-26 — 0.2.1: mac mic fix + editable recordings
 Asked: mic said "blocked" on macOS with no prompt despite Allow; also wants to edit recordings
 (delete frames/lines). Cause: side panels can't render the getUserMedia prompt — it rejects

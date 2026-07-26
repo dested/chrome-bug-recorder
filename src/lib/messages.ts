@@ -1,4 +1,4 @@
-import type { CaptureMode, NoteDraft, PageEvent, RecordingMeta, Settings } from './types';
+import type { CaptureMode, NoteDraft, PageEvent, RecordingMeta, Settings, TranscriptSegment } from './types';
 
 /** Content script / side panel → background. */
 export type Request =
@@ -20,10 +20,12 @@ export type Request =
   // background just mints the Session record around them.
   | { type: 'recording:add'; id: string; name: string; origin: string; meta: RecordingMeta }
   | { type: 'recording:setActive'; active: boolean }
-  | { type: 'recording:written'; id: string }
+  | { type: 'recording:written'; id: string; rev: number }
   | { type: 'recording:frame:delete'; id: string; index: number }
   | { type: 'recording:line:update'; id: string; index: number; text: string }
   | { type: 'recording:line:delete'; id: string; index: number }
+  // The on-device Whisper pass finished and supersedes the Web Speech lines.
+  | { type: 'recording:transcript'; id: string; transcript: TranscriptSegment[] }
   // Content script → panel, relayed while a recording is live.
   | { type: 'recording:event'; event: PageEvent };
 

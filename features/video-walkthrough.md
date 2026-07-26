@@ -6,10 +6,12 @@
 
 Record your screen, talk through it, and hand your coding agent something it can actually read: a
 folder of deduplicated keyframes, a timed transcript, and the console/network errors that fired —
-all on one timeline. Claude can't watch video; this distills a recording *live, while it records*,
-so there is no ffmpeg, no Whisper, and no post-processing step. The distillation logic is a faithful
-TypeScript port of [claude-real-video](https://github.com/HUANGCHIHHUNGLeo/claude-real-video)'s
-dedup and contact-sheet methods (see `decisions.md`).
+all on one timeline. Claude can't watch video; frames are distilled *live, while it records*, and
+the narration is transcribed by **on-device Whisper right after Stop** (transformers.js +
+whisper-small.en in a worker — no Python, no ffmpeg, nothing to install). The pipeline shape comes
+from [claude-real-video](https://github.com/HUANGCHIHHUNGLeo/claude-real-video); the dedup
+sensitivity deliberately departs from it for screen content — the original, run against a real
+capture, kept 1 frame of 22 (see `decisions.md`, 2026-07-26).
 
 ## Behavior spec
 
@@ -28,14 +30,23 @@ dedup and contact-sheet methods (see `decisions.md`).
   no renumbering — same rule as notes), clicking a transcript line edits it inline, ✕ deletes it,
   emptying a line deletes it. Every edit flips `written: false`, so report.md, MANIFEST.txt,
   recording.json, and the grids are rebuilt on disk automatically.
-- Every 500ms the stream is reduced to a **16×16 RGB signature**; a frame is kept iff more than
-  **8% of pixels changed** (a pixel counts as changed when any channel moves >25) versus the closest
-  of the **last 4 kept frames** — so an A-B-A tab flip doesn't re-capture A. No forced keyframes: a
-  static screen adds nothing.
+- Every 500ms the stream is reduced to a **64×64 RGB signature**; a frame is kept iff more than
+  **8 cells changed** (a cell counts as changed when any channel moves >25) versus the closest of
+  the **last 4 kept frames** — an absolute count, not a percent, so action confined to one region
+  (a game canvas, a terminal pane) still registers. A-B-A tab flips don't re-capture A. No forced
+  keyframes: a static screen adds nothing.
 - Kept frames are stored immediately as ≤1920px-wide JPEGs named `NN-mmss.jpg` — the timestamp is in
   the filename and survives everything downstream.
 - Spoken lines are stamped where the sentence *started* (first interim), not where recognition
   finalized, so speech lines up with the frame that was on screen.
+- **Web Speech is only the live ticker.** After Stop, the webm's mic track is transcribed on-device:
+  transformers.js + `onnx-community/whisper-small.en` (q8) in a module worker, WebGPU with wasm
+  fallback (ort wasm ships in the bundle under `ort/`; the ~250MB model downloads from huggingface
+  on first use and is cached by the browser). The session saves *immediately* with the Web Speech
+  lines; when Whisper lands, `recording:transcript` swaps them in and flips `written: false` so
+  every file on disk rewrites. Whisper failing (no mic, silence, offline first run) just leaves the
+  Web Speech lines — honest wording in MANIFEST either way. A quiet status line in the recording
+  view shows model download / transcription progress.
 - While recording, every tab's content script forwards console/network events to the panel; each is
   woven into the timeline at its offset.
 - On stop (button or Chrome's own "Stop sharing"): one final frame candidate runs through normal
@@ -57,7 +68,9 @@ dedup and contact-sheet methods (see `decisions.md`).
 
 | Part | File |
 | --- | --- |
-| Capture, dedup port, thinning, dictation stamps | `src/sidepanel/recorder.ts` |
+| Capture, dedup, thinning, dictation stamps | `src/sidepanel/recorder.ts` |
+| Whisper pass (decode → worker → segments) | `src/sidepanel/transcribe.ts` + `transcribeWorker.ts` |
+| ort wasm copy step (build) | `scripts/copy-ort.mjs` → `public/ort/` (gitignored) |
 | Contact sheets (`make_grids` port) | `src/sidepanel/grids.ts` |
 | Record button, HUD, recording view, flush, zip | `src/sidepanel/App.tsx` + `styles.css` |
 | Timeline report, transcript, json, MANIFEST | `src/lib/markdown.ts` |
@@ -80,7 +93,11 @@ version bump). Blobs: `<sessionId>:frame:<index>` (JPEG) and `<sessionId>:video`
 - **Whole-screen capture of a static IDE** correctly produces very few frames; that's the reference
   behavior (no density-floor keeps), and the webm still has everything.
 - **Speech recognition unsupported/denied** → frames + telemetry only; `transcript:` line in
-  MANIFEST says so honestly.
+  MANIFEST says so honestly. Whisper also skips (no audio track to decode).
+- **Whisper interrupted** (panel closed mid-pass, offline first-run download) → the Web Speech
+  transcript already on disk simply stands; nothing is lost or blocked.
+- **A second walkthrough recorded while a pass is still running** keeps its Web Speech lines — one
+  Whisper pass at a time, no queue (v1 accepted).
 - **>150 keyframes** (long scroll-heavy sessions) → uniform thinning, never a hard stop.
 
 ## Open questions
@@ -94,5 +111,7 @@ version bump). Blobs: `<sessionId>:frame:<index>` (JPEG) and `<sessionId>:video`
 
 Build, reload the extension, connect a folder. Record ~30s: switch tabs twice (A-B-A — expect no
 third capture of A), scroll once, talk through it, trigger a console error. Stop. Check
-`gripes/<slug>/`: frame count sane (not one per 500ms), timestamps in filenames, transcript stamped,
-error in the timeline, grids present, webm plays.
+`gripes/<slug>/`: frame count sane (neither 1 nor one per 500ms — localized motion must register),
+timestamps in filenames, error in the timeline, grids present, webm plays. Then wait for the
+whisper status line to finish (first run downloads ~250MB) and confirm transcript.txt rewrote with
+noticeably better text and MANIFEST says `Whisper small.en, on-device`.

@@ -4,20 +4,25 @@ import { noteFileBase, mmssFile } from '../lib/format';
 import { Dictation } from '../content/speech';
 
 /**
- * Screen capture, distilled while it records — a live port of claude-real-video's
- * dedup. Twice a second we glance at the stream, reduce it to a 16×16 RGB
- * signature, and keep the frame only if enough of those pixels changed against a
- * sliding window of the frames we KEPT — so an A-B-A cutaway doesn't re-capture A.
- * Past the cap the survivors are thinned uniformly so they stay spread across the
- * recording. There are no forced keyframes: a static screen adds nothing. Speech
- * is stamped where the sentence started, not where recognition finally admitted
- * what it heard.
+ * Screen capture, distilled while it records — claude-real-video's dedup shape
+ * (sliding window of KEPT frames, no forced keyframes, uniform thinning past the
+ * cap), recalibrated for screen recordings. The reference compares 16×16 RGB
+ * signatures by *percent* changed with an 8% bar — tuned for full-frame video.
+ * On a screen recording the action usually lives in one region (a game canvas,
+ * a terminal pane), and a 16×16 signature averages it into nothing: run against
+ * a real capture, the original tool kept 1 frame of 22 and every reject scored
+ * under 6%. So: 64×64 cells, and a frame is new when more than a handful of
+ * cells changed — an absolute count, not a percent, because "how much of the
+ * screen moved" is the wrong question when the answer is "one corner of it".
+ * A-B-A cutaways still don't re-capture A, a static screen still adds nothing.
+ * Speech is stamped where the sentence started, not where recognition finally
+ * admitted what it heard.
  */
 
 const SAMPLE_MS = 500; // candidate cadence — stands in for the reference's scene-detect + 1s density floor
-const SIG_SIZE = 16; // signatures are 16×16 RGB — equal-luma hue cuts must not look identical
-const PIX_TOL = 25; // a pixel counts as changed if any channel moves more than this
-const DEDUP_THRESHOLD = 8; // percent of pixels that must change for a frame to be new
+const SIG_SIZE = 64; // 64×64 RGB cells — fine enough that a sprite-sized change still flips whole cells
+const PIX_TOL = 25; // a cell counts as changed if any channel moves more than this
+const DEDUP_THRESHOLD = 8; // cells that must change for a frame to be new (~0.2% of 4096 — localized action counts)
 const DEDUP_WINDOW = 4; // vs the last N KEPT frames — A-B-A cutaways don't come back
 const MAX_FRAMES = 150; // uniform thin after dedup so survivors stay spread across the recording
 const MAX_FRAME_W = 1920;
@@ -42,11 +47,11 @@ export interface RecorderHandlers {
   onEnd(): void;
 }
 
-/** Percent of pixels whose max channel delta exceeds PIX_TOL — the reference's pct_diff. */
-function pctDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
-  const pixels = SIG_SIZE * SIG_SIZE;
+/** Count of cells whose max channel delta exceeds PIX_TOL — the reference's pct_diff, kept as a count. */
+function cellDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  const cells = SIG_SIZE * SIG_SIZE;
   let changed = 0;
-  for (let i = 0; i < pixels; i++) {
+  for (let i = 0; i < cells; i++) {
     const p = i * 4;
     const d = Math.max(
       Math.abs(a[p] - b[p]),
@@ -55,7 +60,7 @@ function pctDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
     );
     if (d > PIX_TOL) changed++;
   }
-  return (100 * changed) / pixels;
+  return changed;
 }
 
 function toJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -220,10 +225,10 @@ export class Recorder {
       if (!this.sigs.length) {
         reason = 'start';
       } else {
-        const minDist = Math.min(...this.sigs.map((k) => pctDiff(sig, k)));
+        const minDist = Math.min(...this.sigs.map((k) => cellDiff(sig, k)));
         if (minDist <= DEDUP_THRESHOLD) return;
         reason = 'change';
-        dist = Math.round(minDist * 10) / 10;
+        dist = minDist; // changed-cell count vs the closest kept frame
       }
 
       const width = Math.min(video.videoWidth, MAX_FRAME_W);
