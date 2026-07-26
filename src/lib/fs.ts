@@ -1,5 +1,12 @@
 import type { Note, Session } from './types';
-import { buildNotesJson, buildReport } from './markdown';
+import {
+  buildManifestTxt,
+  buildNotesJson,
+  buildRecordingJson,
+  buildRecordingReport,
+  buildReport,
+  buildTranscriptTxt,
+} from './markdown';
 import { kv } from './db';
 
 /**
@@ -104,6 +111,40 @@ export async function writeSession(
   await writeFile(dir, 'report.md', new Blob([buildReport(session, notes)], { type: 'text/markdown' }));
   await writeFile(dir, 'notes.json', new Blob([buildNotesJson(session, notes)], { type: 'application/json' }));
   return wroteImagesFor;
+}
+
+/**
+ * Same idea for a recording: keyframes into frames/, then the readable copies —
+ * report for the agent, transcript for grepping, json for tooling, manifest for
+ * a model handed the folder cold — plus the contact sheets in grids/.
+ */
+export async function writeRecordingSession(
+  root: FileSystemDirectoryHandle,
+  session: Session,
+  frames: Map<number, Blob>,
+  video: Blob | undefined,
+  grids: Blob[],
+): Promise<void> {
+  const rec = session.recording;
+  if (!rec) return;
+  const dir = await sessionDir(root, session);
+  const framesDir = await dir.getDirectoryHandle('frames', { create: true });
+  for (const frame of rec.frames) {
+    const blob = frames.get(frame.index);
+    // frame.file is session-relative (frames/03-0125.jpg); the handle wants the leaf.
+    if (blob) await writeFile(framesDir, frame.file.split('/').pop()!, blob);
+  }
+  await writeFile(dir, 'report.md', new Blob([buildRecordingReport(session, rec)], { type: 'text/markdown' }));
+  await writeFile(dir, 'transcript.txt', new Blob([buildTranscriptTxt(rec)], { type: 'text/plain' }));
+  await writeFile(dir, 'recording.json', new Blob([buildRecordingJson(session, rec)], { type: 'application/json' }));
+  await writeFile(dir, 'MANIFEST.txt', new Blob([buildManifestTxt(session, rec)], { type: 'text/plain' }));
+  if (grids.length) {
+    const gridsDir = await dir.getDirectoryHandle('grids', { create: true });
+    for (const [i, grid] of grids.entries()) {
+      await writeFile(gridsDir, `grid_${String(i + 1).padStart(2, '0')}.jpg`, grid);
+    }
+  }
+  if (video) await writeFile(dir, rec.videoFile, video);
 }
 
 export async function deleteSessionFolder(root: FileSystemDirectoryHandle, session: Session) {

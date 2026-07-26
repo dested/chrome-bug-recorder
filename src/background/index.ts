@@ -25,6 +25,7 @@ import { noteFileBase, originOf, slugify, stamp } from '../lib/format';
 
 const ACTIVE_SESSION = 'activeSessionId';
 const SETTINGS = 'settings';
+const RECORDING_ACTIVE = 'recordingActive';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -52,19 +53,22 @@ async function activeSession(): Promise<Session | undefined> {
   return id ? getSession(id) : undefined;
 }
 
-async function createSession(name: string, origin: string): Promise<Session> {
-  const now = Date.now();
-  const label = name.trim() || 'Session';
+async function uniqueSlug(label: string, now: number): Promise<string> {
   const existing = await listSessions();
   const taken = new Set(existing.map((s) => s.slug));
   let slug = `${stamp(now)}-${slugify(label)}`;
   let n = 2;
   while (taken.has(slug)) slug = `${stamp(now)}-${slugify(label)}-${n++}`;
+  return slug;
+}
 
+async function createSession(name: string, origin: string): Promise<Session> {
+  const now = Date.now();
+  const label = name.trim() || 'Session';
   const session: Session = {
     id: crypto.randomUUID(),
     name: label,
-    slug,
+    slug: await uniqueSlug(label, now),
     createdAt: now,
     updatedAt: now,
     origin,
@@ -144,6 +148,21 @@ async function arm(mode: CaptureMode, tabId?: number) {
   const settings = await getSettings();
   return tellTab(id, { type: 'arm', mode, settings });
 }
+
+async function setRecordingActive(active: boolean) {
+  await kv.set(RECORDING_ACTIVE, active);
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id !== undefined) void tellTab(tab.id, { type: 'recording', active });
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  void kv.get<boolean>(RECORDING_ACTIVE).then((active) => {
+    if (active) void tellTab(tabId, { type: 'recording', active: true });
+  });
+});
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'arm-element') void arm('element');
@@ -235,6 +254,42 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         if (tab?.id !== undefined) await tellTab(tab.id, { type: 'disarm' });
         return { ok: true };
       }
+      case 'recording:add': {
+        const now = Date.now();
+        const label = message.name.trim() || 'Walkthrough';
+        const session: Session = {
+          id: message.id,
+          name: label,
+          slug: await uniqueSlug(label, now),
+          createdAt: message.meta.startedAt,
+          updatedAt: now,
+          origin: message.origin,
+          noteCount: 0,
+          kind: 'recording',
+          recording: message.meta,
+        };
+        await putSession(session);
+        await kv.set(ACTIVE_SESSION, session.id);
+        await updateBadge();
+        await broadcast();
+        return session;
+      }
+      case 'recording:setActive': {
+        await setRecordingActive(message.active);
+        return { ok: true };
+      }
+      case 'recording:written': {
+        const session = await getSession(message.id);
+        if (session?.recording) {
+          await putSession({ ...session, recording: { ...session.recording, written: true } });
+        }
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:event':
+        // The side panel consumes these via its own onMessage listener; the
+        // background only needs to not treat them as unknown.
+        return { ok: true };
       default:
         return { ok: false };
     }

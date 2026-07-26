@@ -88,6 +88,13 @@ export async function listSessions(): Promise<Session[]> {
 }
 
 export async function deleteSession(id: string) {
+  const session = await getSession(id);
+  if (session?.recording) {
+    await Promise.all([
+      ...session.recording.frames.map((f) => blobs.delete(`${id}:frame:${f.index}`)),
+      blobs.delete(`${id}:video`),
+    ]);
+  }
   const notes = await listNotes(id);
   await Promise.all(notes.map((n) => deleteNote(n.id)));
   await tx(STORE.sessions, 'readwrite', (s) => s.delete(id));

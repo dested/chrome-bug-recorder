@@ -38,6 +38,7 @@ function boot() {
   let sendTimer: number | null = null;
 
   let events: PageEvent[] = [];
+  let recordingActive = false;
   let lastNoteAt = 0;
   let cursorStyle: HTMLStyleElement | null = null;
 
@@ -57,6 +58,14 @@ function boot() {
     if (!data || data.source !== PAGE_EVENT) return;
     events.push({ level: data.level, message: data.message, detail: data.detail, ts: data.ts });
     if (events.length > 80) events.shift();
+    if (recordingActive) {
+      void chrome.runtime
+        .sendMessage({
+          type: 'recording:event',
+          event: { level: data.level, message: data.message, detail: data.detail, ts: data.ts },
+        })
+        .catch(() => {});
+    }
   });
 
   function recentEvents(): PageEvent[] {
@@ -739,6 +748,11 @@ function boot() {
       // Re-arming with the same mode while aiming is a toggle-off.
       if (phase === 'aiming' && mode === message.mode) disarm();
       else arm(message.mode);
+      respond({ ok: true });
+      return;
+    }
+    if (message.type === 'recording') {
+      recordingActive = message.active;
       respond({ ok: true });
       return;
     }

@@ -71,6 +71,38 @@ export interface NoteDraft {
   cropImage?: string;
 }
 
+export interface TranscriptSegment {
+  /** ms from recording start */
+  t: number;
+  text: string;
+}
+
+export interface RecordingFrame {
+  index: number;
+  /** ms from recording start */
+  t: number;
+  /** Path relative to the session folder, e.g. frames/03-0125.jpg */
+  file: string;
+  /** Why this frame survived dedup. */
+  reason: 'start' | 'change';
+  /** Percent of pixels changed vs the closest of the last kept frames (absent on the first). */
+  dist?: number;
+}
+
+export interface RecordingMeta {
+  startedAt: number;
+  durationMs: number;
+  /** Candidate frames examined; frames[] is what survived dedup. */
+  sampled: number;
+  frames: RecordingFrame[];
+  transcript: TranscriptSegment[];
+  /** Console/network events forwarded by content scripts while recording. ts is absolute. */
+  events: PageEvent[];
+  videoFile: string;
+  /** True once the folder exists in the connected project dir. */
+  written: boolean;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -79,6 +111,9 @@ export interface Session {
   updatedAt: number;
   origin: string;
   noteCount: number;
+  /** Absent means a plain note session. */
+  kind?: 'recording';
+  recording?: RecordingMeta;
 }
 
 export interface Settings {

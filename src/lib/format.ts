@@ -36,6 +36,18 @@ export function noteFileBase(index: number): string {
   return String(index).padStart(2, '0');
 }
 
+/** 4:32 — elapsed time inside a recording. */
+export function mmss(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(total / 60)}:${pad(total % 60)}`;
+}
+
+/** 0432 — mmss without the colon, for filenames. */
+export function mmssFile(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  return `${pad(Math.floor(total / 60))}${pad(total % 60)}`;
+}
+
 /** Path relative to the site root, for compact display. */
 export function shortUrl(url: string): string {
   try {

@@ -1,4 +1,4 @@
-import type { CaptureMode, NoteDraft, Settings } from './types';
+import type { CaptureMode, NoteDraft, PageEvent, RecordingMeta, Settings } from './types';
 
 /** Content script / side panel → background. */
 export type Request =
@@ -15,12 +15,20 @@ export type Request =
   | { type: 'note:written'; ids: string[] }
   | { type: 'state:get' }
   | { type: 'arm'; mode: CaptureMode; tabId?: number }
-  | { type: 'disarm' };
+  | { type: 'disarm' }
+  // The panel has already stored the frame/video blobs under `id`; the
+  // background just mints the Session record around them.
+  | { type: 'recording:add'; id: string; name: string; origin: string; meta: RecordingMeta }
+  | { type: 'recording:setActive'; active: boolean }
+  | { type: 'recording:written'; id: string }
+  // Content script → panel, relayed while a recording is live.
+  | { type: 'recording:event'; event: PageEvent };
 
 /** Background → content script. */
 export type ContentCommand =
   | { type: 'arm'; mode: CaptureMode; settings: Settings }
   | { type: 'disarm' }
+  | { type: 'recording'; active: boolean }
   | { type: 'ping' };
 
 /** Background → side panel broadcast. */

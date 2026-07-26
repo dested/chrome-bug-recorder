@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CaptureMode, Note, Session, Settings } from '../lib/types';
+import type { CaptureMode, Note, PageEvent, Session, Settings } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import { send } from '../lib/messages';
 import { blobs } from '../lib/db';
@@ -12,13 +12,24 @@ import {
   loadProjectDir,
   pickProjectDir,
   requestPermission,
+  writeRecordingSession,
   writeSession,
   type DirPermission,
   type NoteImages,
 } from '../lib/fs';
-import { agentPrompt, buildNotesJson, buildReport } from '../lib/markdown';
+import {
+  agentPrompt,
+  buildManifestTxt,
+  buildNotesJson,
+  buildRecordingJson,
+  buildRecordingReport,
+  buildReport,
+  buildTranscriptTxt,
+} from '../lib/markdown';
 import { blobBytes, makeZip, textBytes } from '../lib/zip';
-import { clockTime, dateTime, shortUrl } from '../lib/format';
+import { clockTime, dateTime, mmss, shortUrl } from '../lib/format';
+import { Recorder, type RecorderUpdate } from './recorder';
+import { makeGrids, type GridFrame } from './grids';
 
 interface PanelState {
   sessions: Session[];
@@ -40,7 +51,15 @@ export default function App() {
   const [name, setName] = useState('');
   const [shortcut, setShortcut] = useState('');
   const [showSessions, setShowSessions] = useState(false);
+  const [recUpdate, setRecUpdate] = useState<RecorderUpdate | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [expandedFrame, setExpandedFrame] = useState<number | null>(null);
+  const [frameUrls, setFrameUrls] = useState<Record<number, string>>({});
   const flushing = useRef(false);
+  const recorderRef = useRef<Recorder | null>(null);
+  const flushingRec = useRef(false);
+  // The Stop button and Chrome's own "Stop sharing" bar can both fire.
+  const stopGuard = useRef(false);
 
   const session = useMemo(
     () => state.sessions.find((s) => s.id === state.activeSessionId) ?? null,
@@ -55,6 +74,9 @@ export default function App() {
     void refresh();
     const listener = (message: { type?: string }) => {
       if (message?.type === 'state:changed') void refresh();
+      if (message?.type === 'recording:event' && recorderRef.current) {
+        recorderRef.current.addEvent((message as { event: PageEvent }).event);
+      }
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
@@ -141,6 +163,35 @@ export default function App() {
     })();
   }, [dir, perm, session, state.notes, refresh]);
 
+  useEffect(() => {
+    if (!dir || perm !== 'granted' || !session?.recording || session.recording.written) return;
+    if (flushingRec.current) return;
+
+    flushingRec.current = true;
+    void (async () => {
+      try {
+        const rec = session.recording!;
+        const frames = new Map<number, Blob>();
+        for (const f of rec.frames) {
+          const blob = await blobs.get(`${session.id}:frame:${f.index}`);
+          if (blob) frames.set(f.index, blob);
+        }
+        const video = await blobs.get(`${session.id}:video`);
+        const gridFrames = rec.frames
+          .map((f) => ({ blob: frames.get(f.index), label: f.file.split('/').pop()! }))
+          .filter((g): g is GridFrame => Boolean(g.blob));
+        await writeRecordingSession(dir, session, frames, video, await makeGrids(gridFrames));
+        await send({ type: 'recording:written', id: session.id });
+        await refresh();
+      } catch (error) {
+        setFlash(`write failed: ${String(error).slice(0, 60)}`);
+        setPerm(await checkPermission(dir));
+      } finally {
+        flushingRec.current = false;
+      }
+    })();
+  }, [dir, perm, session, refresh]);
+
   // ── thumbnails ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +218,29 @@ export default function App() {
     })();
   }, [expanded, fullShots]);
 
+  // ── recording frames ──────────────────────────────────────────────────
+  useEffect(() => {
+    setFrameUrls({});
+    setExpandedFrame(null);
+  }, [session?.id]);
+
+  useEffect(() => {
+    if (session?.kind !== 'recording' || !session.recording) return;
+    let cancelled = false;
+    void (async () => {
+      const next: Record<number, string> = {};
+      for (const f of session.recording!.frames) {
+        if (frameUrls[f.index]) continue;
+        const blob = await blobs.get(`${session.id}:frame:${f.index}`);
+        if (blob) next[f.index] = URL.createObjectURL(blob);
+      }
+      if (!cancelled && Object.keys(next).length) setFrameUrls((prev) => ({ ...prev, ...next }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session, frameUrls]);
+
   // ── actions ───────────────────────────────────────────────────────────
   const say = (text: string) => {
     setFlash(text);
@@ -176,6 +250,38 @@ export default function App() {
   const arm = async (mode: CaptureMode) => {
     const result = await send<{ ok: boolean }>({ type: 'arm', mode });
     if (!result?.ok) say("can't record on this page");
+  };
+
+  const stopRecording = async () => {
+    const r = recorderRef.current;
+    if (!r || stopGuard.current) return;
+    stopGuard.current = true;
+    setStopping(true);
+    try {
+      await send({ type: 'recording:setActive', active: false });
+      const meta = await r.stop();
+      await send({ type: 'recording:add', id: r.sessionId, name: 'Walkthrough', origin: '', meta });
+      say('walkthrough saved');
+      await refresh();
+    } finally {
+      recorderRef.current = null;
+      setRecUpdate(null);
+      setStopping(false);
+      stopGuard.current = false;
+    }
+  };
+
+  const startRecording = async () => {
+    if (recorderRef.current) return;
+    const r = new Recorder({ onUpdate: setRecUpdate, onEnd: () => void stopRecording() }, state.settings.lang);
+    try {
+      await r.start();
+    } catch {
+      say('screen share refused');
+      return;
+    }
+    recorderRef.current = r;
+    await send({ type: 'recording:setActive', active: true });
   };
 
   const editShortcut = () => chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
@@ -218,6 +324,35 @@ export default function App() {
 
   const exportZip = async () => {
     if (!session) return;
+    if (session.kind === 'recording' && session.recording) {
+      const rec = session.recording;
+      const files = [
+        { name: `${session.slug}/report.md`, data: textBytes(buildRecordingReport(session, rec)) },
+        { name: `${session.slug}/transcript.txt`, data: textBytes(buildTranscriptTxt(rec)) },
+        { name: `${session.slug}/recording.json`, data: textBytes(buildRecordingJson(session, rec)) },
+        { name: `${session.slug}/MANIFEST.txt`, data: textBytes(buildManifestTxt(session, rec)) },
+      ];
+      const gridFrames: GridFrame[] = [];
+      for (const f of rec.frames) {
+        const blob = await blobs.get(`${session.id}:frame:${f.index}`);
+        if (!blob) continue;
+        files.push({ name: `${session.slug}/${f.file}`, data: await blobBytes(blob) });
+        gridFrames.push({ blob, label: f.file.split('/').pop()! });
+      }
+      const sheets = await makeGrids(gridFrames);
+      for (const [i, sheet] of sheets.entries()) {
+        files.push({
+          name: `${session.slug}/grids/grid_${String(i + 1).padStart(2, '0')}.jpg`,
+          data: await blobBytes(sheet),
+        });
+      }
+      const video = await blobs.get(`${session.id}:video`);
+      if (video) files.push({ name: `${session.slug}/${rec.videoFile}`, data: await blobBytes(video) });
+      const zipUrl = URL.createObjectURL(makeZip(files));
+      await chrome.downloads.download({ url: zipUrl, filename: `${session.slug}.zip`, saveAs: true });
+      say('zip exported');
+      return;
+    }
     const entries = [
       { name: `${session.slug}/report.md`, data: textBytes(buildReport(session, state.notes)) },
       { name: `${session.slug}/notes.json`, data: textBytes(buildNotesJson(session, state.notes)) },
@@ -241,6 +376,8 @@ export default function App() {
 
   const folderReady = dir && perm === 'granted';
   const written = state.notes.filter((n) => n.written).length;
+  const rec = session?.kind === 'recording' ? (session.recording ?? null) : null;
+  const hasContent = state.notes.length > 0 || Boolean(session?.recording);
 
   return (
     <div className="app">
@@ -252,8 +389,17 @@ export default function App() {
         <span className="wordmark">Gripe</span>
         <span className="spacer" />
         <span className="count">
-          {state.notes.length} note{state.notes.length === 1 ? '' : 's'}
-          {folderReady && state.notes.length ? ` · ${written} on disk` : ''}
+          {rec ? (
+            <>
+              {rec.frames.length} keyframe{rec.frames.length === 1 ? '' : 's'}
+              {rec.written && folderReady ? ' · on disk' : ''}
+            </>
+          ) : (
+            <>
+              {state.notes.length} note{state.notes.length === 1 ? '' : 's'}
+              {folderReady && state.notes.length ? ` · ${written} on disk` : ''}
+            </>
+          )}
         </span>
       </header>
 
@@ -288,7 +434,10 @@ export default function App() {
             >
               <div className="sname">{s.name}</div>
               <div className="smeta">
-                {s.noteCount} note{s.noteCount === 1 ? '' : 's'} · {dateTime(s.createdAt)}
+                {s.kind === 'recording'
+                  ? `${s.recording?.frames.length ?? 0} frames`
+                  : `${s.noteCount} note${s.noteCount === 1 ? '' : 's'}`}{' '}
+                · {dateTime(s.createdAt)}
               </div>
               <button
                 className="kill"
@@ -337,97 +486,156 @@ export default function App() {
         )}
       </div>
 
-      <div className="controls">
-        <button className="arm" onClick={() => void arm('element')}>
-          Point &amp; record {shortcut && <kbd>{shortcut}</kbd>}
-        </button>
-        <div className="modes">
-          <button className="mode" onClick={() => void arm('region')}>
-            Region
+      {recUpdate ? (
+        <div className="controls">
+          <div className="rec">
+            <span className="rec-dot" />
+            <span className="rec-time">{mmss(recUpdate.elapsedMs)}</span>
+            <span className="rec-meta">
+              {recUpdate.frameCount} frames · {recUpdate.segmentCount} lines
+            </span>
+            <button className="rec-stop" onClick={() => void stopRecording()} disabled={stopping}>
+              {stopping ? 'saving…' : 'Stop'}
+            </button>
+          </div>
+          <div className={`rec-interim ${recUpdate.micState === 'denied' ? 'warn' : ''}`}>
+            {recUpdate.micState === 'denied'
+              ? 'microphone blocked — recording without narration'
+              : recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
+          </div>
+        </div>
+      ) : (
+        <div className="controls">
+          <button className="arm" onClick={() => void arm('element')}>
+            Point &amp; record {shortcut && <kbd>{shortcut}</kbd>}
           </button>
-          <button className="mode" onClick={() => void arm('draw')}>
-            Draw
-          </button>
-          <button className="mode" onClick={() => void arm('page')}>
-            Page
+          <div className="modes">
+            <button className="mode" onClick={() => void arm('region')}>
+              Region
+            </button>
+            <button className="mode" onClick={() => void arm('draw')}>
+              Draw
+            </button>
+            <button className="mode" onClick={() => void arm('page')}>
+              Page
+            </button>
+            <button className="mode" onClick={() => void startRecording()}>
+              Record
+            </button>
+          </div>
+          <button className="hintline" onClick={editShortcut}>
+            {shortcut ? `${shortcut} works anywhere · change it` : 'no shortcut bound — set one'}
           </button>
         </div>
-        <button className="hintline" onClick={editShortcut}>
-          {shortcut ? `${shortcut} works anywhere · change it` : 'no shortcut bound — set one'}
-        </button>
-      </div>
+      )}
 
-      <div className="notes">
-        {!state.notes.length && (
-          <div className="empty">
-            Nothing recorded yet.
-            <br />
-            Hit <b>{shortcut || 'the shortcut'}</b> on the page,
-            <br />
-            click what's wrong, and just say it.
+      {rec ? (
+        <div className="notes">
+          <div className="rec-sum">
+            {mmss(rec.durationMs)} · {rec.frames.length} keyframes · {rec.transcript.length} spoken lines
+            {rec.events.length ? ` · ${rec.events.length} errors` : ''}
           </div>
-        )}
-        {state.notes.map((note) => (
-          <div key={note.id}>
-            <div className="note">
-              {thumbs[note.id] && (
-                <img
-                  className="thumb"
-                  src={thumbs[note.id]}
-                  alt=""
-                  onClick={() => setExpanded(expanded === note.id ? null : note.id)}
-                />
-              )}
-              <span className="idx">{note.index}</span>
-              <div className="body">
-                {editing === note.id ? (
-                  <textarea
-                    autoFocus
-                    defaultValue={note.text}
-                    rows={3}
-                    onBlur={async (e) => {
-                      setEditing(null);
-                      if (e.target.value !== note.text) {
-                        await send({ type: 'note:update', id: note.id, text: e.target.value });
-                        await refresh();
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className={`text ${note.text ? '' : 'blank'}`} onClick={() => setEditing(note.id)}>
-                    {note.text || 'no comment — screenshot only'}
-                  </div>
-                )}
-                <div className="meta">
-                  {note.target && <span className="sel">{note.target.selector}</span>}
-                  <span>{shortUrl(note.url)}</span>
-                  <span>· {clockTime(note.createdAt)}</span>
-                </div>
-                {note.events.length > 0 && (
-                  <div className="errs">
-                    {note.events.length} console/network error{note.events.length === 1 ? '' : 's'} captured
-                  </div>
-                )}
-              </div>
-              <button
-                className="kill"
-                title="Delete note"
-                onClick={async () => {
-                  await send({ type: 'note:delete', id: note.id });
-                  await refresh();
-                }}
+          <div className="rec-frames">
+            {rec.frames.map((f) => (
+              <div
+                key={f.index}
+                className="rframe"
+                onClick={() => setExpandedFrame(expandedFrame === f.index ? null : f.index)}
               >
-                ×
-              </button>
-            </div>
-            {expanded === note.id && fullShots[note.id] && (
-              <div className="shot">
-                <img src={fullShots[note.id]} alt="" onClick={() => setExpanded(null)} />
+                {frameUrls[f.index] && <img src={frameUrls[f.index]} alt="" />}
+                <span className="rtime">{mmss(f.t)}</span>
               </div>
-            )}
+            ))}
           </div>
-        ))}
-      </div>
+          {expandedFrame !== null && frameUrls[expandedFrame] && (
+            <div className="shot">
+              <img src={frameUrls[expandedFrame]} alt="" onClick={() => setExpandedFrame(null)} />
+            </div>
+          )}
+          {rec.transcript.length > 0 && (
+            <div className="rec-script">
+              {rec.transcript.map((s, i) => (
+                <div className="line" key={i}>
+                  <span className="at">{mmss(s.t)}</span>
+                  <span>{s.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="notes">
+          {!state.notes.length && (
+            <div className="empty">
+              Nothing recorded yet.
+              <br />
+              Hit <b>{shortcut || 'the shortcut'}</b> on the page,
+              <br />
+              click what's wrong, and just say it.
+            </div>
+          )}
+          {state.notes.map((note) => (
+            <div key={note.id}>
+              <div className="note">
+                {thumbs[note.id] && (
+                  <img
+                    className="thumb"
+                    src={thumbs[note.id]}
+                    alt=""
+                    onClick={() => setExpanded(expanded === note.id ? null : note.id)}
+                  />
+                )}
+                <span className="idx">{note.index}</span>
+                <div className="body">
+                  {editing === note.id ? (
+                    <textarea
+                      autoFocus
+                      defaultValue={note.text}
+                      rows={3}
+                      onBlur={async (e) => {
+                        setEditing(null);
+                        if (e.target.value !== note.text) {
+                          await send({ type: 'note:update', id: note.id, text: e.target.value });
+                          await refresh();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className={`text ${note.text ? '' : 'blank'}`} onClick={() => setEditing(note.id)}>
+                      {note.text || 'no comment — screenshot only'}
+                    </div>
+                  )}
+                  <div className="meta">
+                    {note.target && <span className="sel">{note.target.selector}</span>}
+                    <span>{shortUrl(note.url)}</span>
+                    <span>· {clockTime(note.createdAt)}</span>
+                  </div>
+                  {note.events.length > 0 && (
+                    <div className="errs">
+                      {note.events.length} console/network error{note.events.length === 1 ? '' : 's'} captured
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="kill"
+                  title="Delete note"
+                  onClick={async () => {
+                    await send({ type: 'note:delete', id: note.id });
+                    await refresh();
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              {expanded === note.id && fullShots[note.id] && (
+                <div className="shot">
+                  <img src={fullShots[note.id]} alt="" onClick={() => setExpanded(null)} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="toggles">
         {(
@@ -453,10 +661,10 @@ export default function App() {
       </div>
 
       <div className="foot">
-        <button className="primary" disabled={!state.notes.length} onClick={copyPrompt}>
+        <button className="primary" disabled={!hasContent} onClick={copyPrompt}>
           Copy prompt for Claude Code
         </button>
-        <button className="ghost" disabled={!state.notes.length} onClick={exportZip} title="Download as .zip">
+        <button className="ghost" disabled={!hasContent} onClick={exportZip} title="Download as .zip">
           .zip
         </button>
         <button
