@@ -91,8 +91,8 @@ Touchpoints: `public/injected.js`, `recentEvents` in `src/content/index.ts`
 ### 5. Folder connect → write-through [medium]
 Touchpoints: `src/lib/fs.ts`, the flush effect in `src/sidepanel/App.tsx`, `src/lib/markdown.ts`
 
-1. Panel → **Connect folder** → pick the scratch dir → dot turns green, path reads
-   `<dir>/gripes/<slug>`.
+1. Panel → **Choose folder** → pick the scratch dir → dot turns green, the folder line reads
+   `<dir>/gripes/<slug>`, and the panel asks for the absolute path.
 2. Record a note → within a second, `gripes/<slug>/` on disk contains `report.md`, `notes.json`,
    `01-full.png`, and `01-target.png` (element/region modes).
 3. Open `report.md` → images render, every note has URL, time, element, box, viewport.
@@ -146,28 +146,15 @@ Touchpoints: `src/content/index.ts` boot, `arm()` in `src/background/index.ts`
 4. `Esc` mid-compose → overlay fully disappears: no crosshair cursor left on the page, no leftover
    highlight, host page clicks work again.
 
-### 10. Two projects, two folders [medium]
-Touchpoints: the `project:*` handlers in `src/background/index.ts`, the folder strip in
-`src/sidepanel/App.tsx`, `features/project-folder-sync.md`
+### 10. The panel at three widths [cheap]
+Touchpoints: `src/sidepanel/styles.css`, `scripts/preview.mjs`
 
-1. With one folder connected, `▾` on the folder strip → **+ connect another folder** → pick a second
-   scratch dir → it becomes active, the path input asks for *its* absolute path.
-2. Record a note → it lands in the **second** folder; the first is untouched.
-3. `▾` → click the first project → the strip's path switches, and the switcher's session list now
-   shows that project's gripes (the other one is behind the "N in other projects" row).
-4. Reopen a session from project one, then switch the active project to two while it's open → record
-   nothing, just check the strip: the path still names project **one**. A session writes home.
-5. **done** on that session → files land in project one even though two is where you're headed next.
-6. `×` on a project row → it's forgotten, files on disk survive, and its sessions still list under
-   "N in other projects" with `no folder`.
-7. Restart Chrome → both projects are still listed with their paths; the dots may be orange until
-   **Reconnect**.
-
-### 11. Migrating from 0.4 [cheap, one-shot]
-Only meaningful on a profile that used 0.4. Touchpoints: the migration effect in `src/sidepanel/App.tsx`
-
-1. Load 0.5 over a profile with a connected folder → the folder appears as the one project, keeping
-   its name and absolute path, and every existing session lists inside it (not under "other
-   projects").
-2. DevTools → Application → IndexedDB → `bug-recorder` → `kv`: `projectDir` and `projectPath` are
-   gone, `projects` and `projectHandles` are present.
+1. `npm run build && npm run preview` → open
+   `localhost:8777/gallery.html?w=380,560,900&mode=rec`.
+2. All three read as the same design: no fine print at 900, no clipping at 380, the column centered
+   rather than full-bleed at 900, the CTA and mode buttons on one row past ~520.
+3. `&mode=notes`, `&mode=empty`, `&mode=nofolder` — thumbnails scale, the empty state stays centered,
+   and **Choose folder** is the only accent-tinted link on the screen.
+4. Hover a row in the gripe switcher and a keyframe → `×` fades in, top-right, and nothing else moves.
+5. Then look at it for real in Chrome: the harness stubs the chrome APIs, so it proves layout and
+   nothing else.

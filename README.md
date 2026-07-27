@@ -79,8 +79,8 @@ npm install && npm run build
 ```
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → pick `dist/`. Click the
-icon to open the side panel, hit **Connect folder**, choose your repo. Done — Chrome
-remembers the folder across restarts.
+icon to open the side panel, hit **Choose folder**, pick where gripes should land — your
+repo, or one folder for all of them. Done: Chrome remembers it across restarts.
 
 It then asks you to paste that folder's absolute path, once. Chrome refuses to tell an
 extension where a picked folder actually lives, and an agent that can't resolve the path
@@ -88,16 +88,11 @@ burns half a dozen tool calls hunting for the report. Every report opens with th
 
 Not connecting a folder is fine too; **.zip** in the footer downloads the same thing.
 
-## One folder per project
-
-A gripe belongs to a repo, and the next one usually doesn't. So connected folders are a
-list: **▾** on the folder strip switches projects in one click — no picker, no re-typed
-path, no permission dance. Each gripe is bound to the folder it started in and writes there
-for good, however many times you switch afterwards.
+## Closing a gripe
 
 **done** in the footer ends one: everything hits disk, the prompt lands on your clipboard,
-and the panel goes blank. The next thing you point at opens a fresh gripe — in whichever
-project is selected then, which is the whole reason the switcher pops open when you close.
+and the panel goes blank. The next thing you point at opens a fresh gripe. Old ones stay in
+the switcher, tagged `closed` — click one to reopen it and add to it.
 
 ## Controls
 
@@ -128,10 +123,9 @@ it calls it off. Or just say *"save it."*
 
 ## Sessions
 
-Every session is kept. **▾** next to the name lists the ones in this project (the rest are
-one row away) and switches back to an old one — new notes append and `report.md` is
-rewritten in place, and a closed one reopens by being picked. Notes recorded while the
-panel is closed still land; they flush to disk when you open it.
+Every session is kept. **▾** next to the name switches back to an old one — new notes
+append and `report.md` is rewritten in place, and a closed one reopens by being picked.
+Notes recorded while the panel is closed still land; they flush to disk when you open it.
 
 ## Walkthroughs
 
@@ -205,6 +199,7 @@ screenshot compositor are all hand-rolled — `npm install` pulls nothing but bu
 ```bash
 npm run dev        # vite --watch; reload the extension after it rebuilds
 npm run typecheck
+npm run preview    # after a build: the panel at any width, chrome APIs stubbed
 ```
 
 MIT.

@@ -1,5 +1,5 @@
 import type { ContentCommand, Request } from '../lib/messages';
-import type { CaptureMode, Note, NoteDraft, Project, Session, Settings } from '../lib/types';
+import type { CaptureMode, Note, NoteDraft, Session, Settings } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import {
   blobs,
@@ -14,7 +14,7 @@ import {
   putNote,
   putSession,
 } from '../lib/db';
-import { cleanPath, noteFileBase, originOf, slugify, stamp } from '../lib/format';
+import { noteFileBase, originOf, slugify, stamp } from '../lib/format';
 
 /**
  * The service worker is the only component that's always alive when it needs to
@@ -24,8 +24,6 @@ import { cleanPath, noteFileBase, originOf, slugify, stamp } from '../lib/format
  */
 
 const ACTIVE_SESSION = 'activeSessionId';
-const ACTIVE_PROJECT = 'activeProjectId';
-const PROJECTS = 'projects';
 const SETTINGS = 'settings';
 const RECORDING_ACTIVE = 'recordingActive';
 
@@ -55,25 +53,9 @@ async function activeSession(): Promise<Session | undefined> {
   return id ? getSession(id) : undefined;
 }
 
-/**
- * Project *metadata* only — the directory handles belong to the panel, which is
- * the only context that can hold one (see `lib/fs.ts`). The worker knows which
- * project is active so every session it mints is stamped with it.
- */
-async function getProjects(): Promise<Project[]> {
-  return (await kv.get<Project[]>(PROJECTS)) ?? [];
-}
-
-async function patchProject(id: string, patch: Partial<Project>) {
-  const projects = (await getProjects()).map((p) => (p.id === id ? { ...p, ...patch } : p));
-  await kv.set(PROJECTS, projects);
-  return projects;
-}
-
-/** Coming back to a project resumes its newest *open* gripe — never one you already handed off. */
-async function resumeIn(projectId: string | null) {
-  const sessions = await listSessions();
-  const next = sessions.find((s) => !s.closed && (s.projectId ?? null) === projectId);
+/** After a delete, fall back to the newest gripe that hasn't been handed off — never a closed one. */
+async function resumeOpen() {
+  const next = (await listSessions()).find((s) => !s.closed);
   await kv.set(ACTIVE_SESSION, next?.id ?? null);
 }
 
@@ -97,9 +79,6 @@ async function createSession(name: string, origin: string): Promise<Session> {
     updatedAt: now,
     origin,
     noteCount: 0,
-    // Whichever folder is connected right now owns this gripe for good; the write
-    // path follows the session's project, not whatever is active later.
-    projectId: (await kv.get<string>(ACTIVE_PROJECT)) ?? undefined,
   };
   await putSession(session);
   await kv.set(ACTIVE_SESSION, session.id);
@@ -230,7 +209,6 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         const session = await getSession(message.id);
         // Picking a closed gripe out of the list is how you reopen it.
         if (session?.closed) await putSession({ ...session, closed: false });
-        if (session?.projectId) await kv.set(ACTIVE_PROJECT, session.projectId);
         await kv.set(ACTIVE_SESSION, message.id);
         await updateBadge();
         await broadcast();
@@ -248,59 +226,9 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         return { ok: true };
       }
       case 'session:delete': {
-        const gone = await getSession(message.id);
         await deleteSession(message.id);
-        if ((await kv.get<string>(ACTIVE_SESSION)) === message.id) {
-          await resumeIn(gone?.projectId ?? (await kv.get<string>(ACTIVE_PROJECT)) ?? null);
-        }
+        if ((await kv.get<string>(ACTIVE_SESSION)) === message.id) await resumeOpen();
         await updateBadge();
-        await broadcast();
-        return { ok: true };
-      }
-      case 'project:add': {
-        const now = Date.now();
-        const project: Project = {
-          id: crypto.randomUUID(),
-          name: message.name,
-          path: cleanPath(message.path ?? ''),
-          addedAt: now,
-          lastUsedAt: now,
-        };
-        await kv.set(PROJECTS, [...(await getProjects()), project]);
-        await kv.set(ACTIVE_PROJECT, project.id);
-        // Migration from the single-folder era: everything already recorded was
-        // written into this folder, so it belongs to it.
-        if (message.adopt) {
-          for (const s of await listSessions()) {
-            if (!s.projectId) await putSession({ ...s, projectId: project.id });
-          }
-        }
-        await broadcast();
-        return project;
-      }
-      case 'project:activate': {
-        await kv.set(ACTIVE_PROJECT, message.id);
-        await patchProject(message.id, { lastUsedAt: Date.now() });
-        await resumeIn(message.id);
-        await updateBadge();
-        await broadcast();
-        return { ok: true };
-      }
-      case 'project:path': {
-        await patchProject(message.id, { path: cleanPath(message.path) });
-        await broadcast();
-        return { ok: true };
-      }
-      case 'project:forget': {
-        const rest = (await getProjects()).filter((p) => p.id !== message.id);
-        await kv.set(PROJECTS, rest);
-        // Sessions keep their projectId — the folder is forgotten, not the history.
-        if ((await kv.get<string>(ACTIVE_PROJECT)) === message.id) {
-          const next = [...rest].sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0] ?? null;
-          await kv.set(ACTIVE_PROJECT, next?.id ?? null);
-          await resumeIn(next?.id ?? null);
-          await updateBadge();
-        }
         await broadcast();
         return { ok: true };
       }
@@ -349,8 +277,6 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
           activeSessionId: current?.id ?? null,
           notes: current ? await listNotes(current.id) : [],
           settings: await getSettings(),
-          projects: await getProjects(),
-          activeProjectId: (await kv.get<string>(ACTIVE_PROJECT)) ?? null,
         };
       }
       case 'arm':
@@ -371,7 +297,6 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
           updatedAt: now,
           origin: message.origin,
           noteCount: 0,
-          projectId: (await kv.get<string>(ACTIVE_PROJECT)) ?? undefined,
           kind: 'recording',
           recording: message.meta,
         };

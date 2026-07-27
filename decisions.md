@@ -4,25 +4,28 @@
 > Newest first. Entries dated 2026-07-25 were backfilled on 2026-07-26 by reading the shipped code —
 > the reasoning is reconstructed from the code's own comments and structure.
 
-## 2026-07-26 — Folders are a per-project list, not one setting; and a gripe gets closed
-**Why:** a gripe belongs to a repo, and the next one usually doesn't belong to the same repo. With a
-single `projectDir`, switching cost a disconnect, the OS picker and a re-typed absolute path *every
-time*, and there was no way to say "this one is done" — the finished bundle stayed active and caught
-the next note. So: connected folders are a remembered list (`Project` = id/name/path, one click to
-switch, permission usually still granted), each session is stamped with `projectId` and **writes into
-that folder for its whole life** regardless of what's active later, and `done` closes a gripe — write
-everything, copy the prompt, clear the active session — so the next capture opens a fresh one, in a
-new project if you switched. Handles and metadata are stored separately (`kv.projectHandles` in the
-panel, `kv.projects` in the worker) because `chrome.runtime.sendMessage` JSON-serializes and a
-`FileSystemDirectoryHandle` cannot survive the trip; IndexedDB's structured clone can.
-**Rejected:** *writing every gripe into one central directory and handing the agent a long absolute
-path* (Sal's alternative) — the entire value is that the bundle lands inside the repo the agent is
-already running in, where `gripes/<slug>/report.md` is a relative path it can read without being
-granted anything; a central directory trades that away to solve a switching cost that a list solves
-outright. Note the list is a superset: connect one folder anywhere and you have exactly that setup.
-Also rejected: keeping `+` alongside `done` (closing *is* how you start the next one, and two buttons
-that both mean "new session" is one too many), auto-deleting closed sessions (the history is how you
-reopen and re-hand-off), and per-project `REPORT_DIR` (`gripes/` everywhere, no configuration).
+## 2026-07-26 — One gripe folder, reverting the per-project list; and the panel scales with its width
+**Why:** the per-project folder list shipped in 0.5 and Sal hated it on sight — "forget all that,
+forget folders, there's only one gripe folder." He is right: it turned a thing you set once into a
+thing you maintain (a list, a switcher, per-project paths, a session→folder binding, a migration),
+and the cost it removed — re-picking a folder when you change repos — was smaller than the cost it
+added. 0.6 is back to one `projectDir` + one `projectPath`; `loadProjectDir()` reclaims whichever
+0.5 project was active so nobody has to re-pick. **What survives from 0.5 is `done`** — write the
+bundle, copy the prompt, close the gripe, clear the active session — because "close this gripe and
+start a new one" was the actual ask underneath the folder question.
+The same message called the panel "small and clunky", with a screenshot of it ~1200px wide: 10.5px
+metadata, full-bleed slabs of button, ten stacked strips. So every size in `styles.css` now comes
+from a token scale (`--fs-*`, `--gut`, `--strip`, `--thumb-*`, `--frame-min`) that steps up at 480px
+and 760px; the column caps at 900px and centers; the folder line moved inside the session block
+(it was repeating the slug the line above already showed); the CTA and the four mode buttons become
+one control bar past 520px; keyframes are `auto-fill` rather than a hard 3 columns. `npm run preview`
+serves the built panel with the chrome APIs stubbed, one iframe per width — writing it immediately
+turned up a real bug (session rows' `×` had never been styled and rendered as a stray block).
+**Rejected:** keeping the project list behind a setting (the complaint was the concept, not the
+placement), a central gripes directory (rejected for its own reasons, below — and the one folder can
+be central if you point it there), scaling by `rem` off a root font-size (every size in this
+stylesheet is px and the overlay's isn't shared), and a two-column layout at wide widths (the panel
+is a rail that is *occasionally* wide; a centered column is the honest answer).
 
 ## 2026-07-26 — The walkthrough report leads with contact sheets and rations stills, after an agent read one
 **Why:** the first AI agent handed a real bundle came back with ranked feedback, and it is the only

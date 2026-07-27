@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Gripe — widths</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #050507; font: 11px ui-monospace, monospace; color: #888; }
+      .row { display: flex; gap: 10px; align-items: flex-start; padding: 8px; }
+      .cell { display: flex; flex-direction: column; gap: 4px; }
+      iframe { border: 1px solid #333; background: #0a0a0c; display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="row" id="row"></div>
+    <script>
+      const q = new URLSearchParams(location.search);
+      const widths = (q.get('w') || '380,560,900').split(',').map(Number);
+      const mode = q.get('mode') || 'rec';
+      const h = Number(q.get('h')) || Math.max(560, window.innerHeight - 40);
+      for (const w of widths) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        const label = document.createElement('div');
+        label.textContent = w + 'px';
+        const f = document.createElement('iframe');
+        f.src = `/preview.html?mode=${mode}&t=${Date.now()}`;
+        f.width = w;
+        f.height = h;
+        cell.append(label, f);
+        document.getElementById('row').append(cell);
+      }
+    </script>
+  </body>
+</html>

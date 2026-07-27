@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gripe — layout preview</title>
+    <script>
+      // Layout harness: stubs the chrome APIs the panel touches on mount and seeds
+      // IndexedDB so the folder reads as connected. Lives in the scratchpad; copied
+      // into dist/ after a build (dist/ is wiped every time).
+      const MODE = new URLSearchParams(location.search).get('mode') || 'rec';
+      const SID = 'preview-session';
+
+      const REC = {
+        startedAt: Date.now() - 143000,
+        durationMs: 143000,
+        sampled: 286,
+        frames: [
+          { index: 1, t: 0, file: 'frames/01-0000.jpg', reason: 'start' },
+          { index: 2, t: 21000, file: 'frames/02-0021.jpg', reason: 'change', dist: 41 },
+          { index: 3, t: 48500, file: 'frames/03-0048.jpg', reason: 'mark' },
+          { index: 4, t: 77000, file: 'frames/04-0077.jpg', reason: 'change', dist: 66 },
+          { index: 5, t: 96000, file: 'frames/05-0096.jpg', reason: 'change', dist: 12 },
+          { index: 6, t: 131000, file: 'frames/06-0131.jpg', reason: 'change', dist: 88 },
+        ],
+        transcript: [
+          { t: 3000, d: 6000, text: 'okay so this is the checkout page, and the totals row here is wrong' },
+          { t: 21000, d: 7000, text: 'watch what happens when I bump the quantity — the subtotal updates but the tax does not' },
+          { t: 48500, d: 5000, text: 'right there, that number should be nine eighty, not eight forty' },
+          { t: 96000, d: 4000, text: 'and the console throws on every one of those clicks' },
+        ],
+        transcriber: 'whisper',
+        reviewed: false,
+        events: [{ level: 'error', message: 'TypeError: cannot read properties of undefined', ts: Date.now() }],
+        eventScope: 'http://localhost:3000',
+        videoFile: 'walkthrough.webm',
+        written: true,
+        rev: 1,
+      };
+
+      const SESSIONS = {
+        rec: [
+          { id: SID, name: 'Checkout totals are wrong', slug: '2026-07-26-2305-checkout-totals-are-wrong', createdAt: Date.now() - 143000, updatedAt: Date.now(), origin: 'http://localhost:3000', noteCount: 0, kind: 'recording', recording: REC },
+          { id: 'old-1', name: 'Nav collapses on iPad', slug: '2026-07-25-1102-nav-collapses', createdAt: Date.now() - 86400000, updatedAt: Date.now() - 86400000, origin: 'http://localhost:3000', noteCount: 4, closed: true },
+        ],
+        notes: [
+          { id: SID, name: 'Checkout flow', slug: '2026-07-26-2305-checkout-flow', createdAt: Date.now() - 900000, updatedAt: Date.now(), origin: 'http://localhost:3000', noteCount: 3 },
+          { id: 'old-1', name: 'Nav collapses on iPad', slug: '2026-07-25-1102-nav-collapses', createdAt: Date.now() - 86400000, updatedAt: Date.now() - 86400000, origin: 'http://localhost:3000', noteCount: 4, closed: true },
+        ],
+        empty: [],
+      };
+
+      const NOTES = [
+        {
+          id: 'n1', sessionId: SID, index: 1, createdAt: Date.now() - 800000,
+          text: 'the Place order button does nothing on the second click — first click works, second one just sits there',
+          mode: 'element', url: 'http://localhost:3000/checkout', title: 'Checkout',
+          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
+          target: { selector: '#place-order', tag: 'button', classes: [], attrs: {}, html: '<button id="place-order">', rect: { x: 0, y: 0, width: 180, height: 44 } },
+          events: [{ level: 'error', message: 'x', ts: 1 }, { level: 'network', message: 'y', ts: 2 }],
+          fullFile: '01-full.png', cropFile: '01-target.png', written: true,
+        },
+        {
+          id: 'n2', sessionId: SID, index: 2, createdAt: Date.now() - 400000,
+          text: 'tax line is missing entirely below the subtotal',
+          mode: 'region', url: 'http://localhost:3000/checkout', title: 'Checkout',
+          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
+          region: { x: 20, y: 40, width: 320, height: 120 },
+          events: [], fullFile: '02-full.png', written: true,
+        },
+        {
+          id: 'n3', sessionId: SID, index: 3, createdAt: Date.now() - 90000,
+          text: '', mode: 'page', url: 'http://localhost:3000/checkout/confirm', title: 'Confirm',
+          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
+          events: [], fullFile: '03-full.png', written: true,
+        },
+      ];
+
+      const STATE = {
+        sessions: SESSIONS[MODE] ?? [],
+        activeSessionId: MODE === 'empty' ? null : SID,
+        notes: MODE === 'notes' ? NOTES : [],
+        settings: { autoDictate: true, spotlight: true, chain: false, autoSend: true, autoSendMs: 3000, lang: '' },
+      };
+
+      window.chrome = {
+        runtime: {
+          sendMessage: async (m) => (m.type === 'state:get' ? STATE : { ok: true }),
+          onMessage: { addListener() {}, removeListener() {} },
+          getURL: (p) => p,
+        },
+        commands: {
+          getAll: async () => [
+            { name: 'arm-element', shortcut: 'Alt+Shift+B' },
+            { name: 'mark-frame', shortcut: 'Alt+Shift+M' },
+          ],
+        },
+        tabs: { query: async () => [{ id: 1, title: 'Checkout', url: 'http://localhost:3000/checkout' }], create() {} },
+        downloads: { download() {} },
+      };
+
+      // A plain object passes as a directory handle here: no queryPermission means
+      // checkPermission() answers 'granted', and only .name is ever displayed.
+      function seed() {
+        return new Promise((done) => {
+          const req = indexedDB.open('bug-recorder', 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
+            if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'id' }).createIndex('bySession', 'sessionId');
+            if (!db.objectStoreNames.contains('blobs')) db.createObjectStore('blobs');
+            if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          };
+          req.onsuccess = async () => {
+            const db = req.result;
+            const put = (store, value, key) =>
+              new Promise((r) => {
+                const t = db.transaction(store, 'readwrite').objectStore(store).put(value, key);
+                t.onsuccess = t.onerror = r;
+              });
+            const del = (store, key) =>
+              new Promise((r) => {
+                const t = db.transaction(store, 'readwrite').objectStore(store).delete(key);
+                t.onsuccess = t.onerror = r;
+              });
+            if (MODE === 'nofolder') {
+              await del('kv', 'projectDir');
+              await del('kv', 'projectPath');
+            } else {
+              await put('kv', { name: 'gripes' }, 'projectDir');
+              await put('kv', 'C:\\Users\\dested\\gripes', 'projectPath');
+            }
+            for (const f of REC.frames) await put('blobs', await shot(f.index), `${SID}:frame:${f.index}`);
+            for (const n of NOTES) {
+              await put('blobs', await shot(n.index + 10), `${n.id}:full`);
+              if (n.cropFile) await put('blobs', await shot(n.index + 20), `${n.id}:crop`);
+            }
+            db.close();
+            done();
+          };
+        });
+      }
+
+      /** Something screenshot-shaped, so the grid isn't a wall of flat rectangles. */
+      function shot(seed) {
+        const c = document.createElement('canvas');
+        c.width = 640;
+        c.height = 400;
+        const x = c.getContext('2d');
+        x.fillStyle = '#15171c';
+        x.fillRect(0, 0, 640, 400);
+        x.fillStyle = '#1e2229';
+        x.fillRect(0, 0, 640, 34);
+        x.fillRect(0, 34, 150, 366);
+        x.fillStyle = '#ff5c39';
+        x.fillRect(14, 12, 10, 10);
+        let y = 60 + ((seed * 13) % 40);
+        for (let i = 0; i < 14; i++) {
+          x.fillStyle = i % 4 === seed % 4 ? '#39414f' : '#262b34';
+          x.fillRect(176, y, 120 + ((seed * 37 + i * 61) % 380), 12);
+          y += 22;
+        }
+        x.fillStyle = '#2c333d';
+        for (let i = 0; i < 8; i++) x.fillRect(20, 60 + i * 26, 110, 12);
+        return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
+      }
+
+      seed().then(() => {
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = '/sidepanel.js';
+        document.body.appendChild(s);
+      });
+    </script>
+    <link rel="stylesheet" href="/assets/sidepanel.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

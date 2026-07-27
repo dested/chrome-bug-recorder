@@ -2,7 +2,26 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
-## 2026-07-26 — one folder per project, and a gripe you can close (0.5.0)
+## 2026-07-26 — revert the folder list, rescale the panel (0.6.0)
+Asked: "ooh i kinda hate it. forget all that. forget folders. theres only one gripe folder. you name
+it how you want." — plus a screenshot at ~1200px wide: "the ui is so small and clunky. rethink it a
+bit". Done: **0.5's per-project folders are gone** — `Project`, `project:*`, `Session.projectId`, the
+handles map and the switcher all removed; back to one `kv.projectDir` + `kv.projectPath`, and
+`loadProjectDir()` reclaims whichever 0.5 project was active (with its path) then deletes the three
+0.5 keys, so nothing has to be re-picked. `done` survives — it was the actual ask underneath.
+**Panel rescaled:** every size in `styles.css` comes from tokens stepped at 480/760px (`--fs-xl…
+--fs-2xs`, `--gut`, `--strip`, `--thumb-*`, `--frame-min`), the column caps at 900px and centers
+instead of running full-bleed, the folder line folded into the session block (it repeated the slug
+shown right above it), CTA + the four modes become one control bar past 520px, keyframes are
+`auto-fill`, and `.kill` is one shared rule instead of four copies. **Found and fixed a real bug**:
+session rows' `×` had never been styled and rendered as a stray block under the meta line.
+New `npm run preview` (zero-dep server + `scripts/preview/`) renders the built panel with the chrome
+APIs stubbed and IndexedDB seeded, one iframe per width — that's what surfaced the `×`. Typecheck +
+both builds clean; layout checked at 380/560/900 in Chrome, extension itself not re-loaded.
+Touched: types/messages/fs/format (lib), background, App.tsx, styles.css, scripts/preview*,
+manifest+package (0.6.0), README, cliffnotes/ui/decisions/verify/features×2, plans.
+
+## 2026-07-26 — one folder per project, and a gripe you can close (0.5.0, reverted by 0.6.0)
 Asked: closing a session should hand it off and start a new one, and the next one lives in a
 different repo — find a better solution than a single connected folder (the floated alternative: one
 central gripes directory reached by long absolute paths). Done: connected folders are now a

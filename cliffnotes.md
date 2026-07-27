@@ -1,7 +1,7 @@
 # Gripe — CliffNotes
 
 > Living map of the project. Read this before any coding session.
-> Last updated: 2026-07-26 (0.5.0). Visual language → `ui.md` · specs → `features/` · why → `decisions.md`
+> Last updated: 2026-07-26 (0.6.0). Visual language → `ui.md` · specs → `features/` · why → `decisions.md`
 
 ## What this is
 
@@ -21,8 +21,9 @@ a few identifiers on purpose (see Gotchas).
 - **Type-check:** `npm run typecheck` (`tsc --noEmit`) — the only automated check in the repo
 - **Load it:** `chrome://extensions` → Developer mode → Load unpacked → `dist/`
 - **No test runner, no linter, no CI.**
-- **Output lands in** `<the session's project>/gripes/<YYYY-MM-DD-HHMM>-<slug>/` — folders are a
-  remembered list (one per repo), switched from the folder strip's `▾`
+- **Output lands in** `<the one connected folder>/gripes/<YYYY-MM-DD-HHMM>-<slug>/`
+- **Look at the panel without Chrome:** `npm run build && npm run preview` →
+  `localhost:8777/gallery.html?w=380,560,900` (stubbed chrome APIs, one iframe per width)
 - **One accent color, everywhere:** `#ff5c39` (`ACCENT` in `src/lib/types.ts`)
 - **Landing site:** `landing/` → https://gripe.dested.com — `cd landing && bun run dev` (:3000),
   deployed by Drydock (rootDir `landing`) on every push to main. Promo video:
@@ -55,6 +56,8 @@ public/
 scripts/
   make-icons.mjs        Zero-dep PNG encoder; draws the reticle mark at 16/32/48/128
   copy-ort.mjs          Stages the ort asyncify wasm pair into public/ort/ (MV3: no remote code)
+  preview.mjs           Zero-dep static server for the panel-layout harness (npm run preview)
+  preview/              gallery.html (iframe per width) + preview.html (stubbed chrome + seeded IDB)
 sidepanel.html          Side panel document; Vite entry for the React app
 src/
   background/
@@ -79,7 +82,7 @@ src/
     grids.ts            3×3 contact sheets (claude-real-video make_grids port)
     transcribe.ts       Post-stop Whisper pass, main-thread half: decode webm audio → worker → segments
     transcribeWorker.ts transformers.js + whisper-small.en q8 in a module worker (webgpu→wasm)
-    styles.css          Side panel styles (tokens at :root)
+    styles.css          Side panel styles — type/space token scale at :root, stepped at 480/760px
 docs/hero.svg           README hero illustration
 vite.config.ts          Build 1: sidepanel + background (ESM, emptyOutDir: true)
 vite.content.config.ts  Build 2: content script (IIFE, emptyOutDir: false)
@@ -111,14 +114,15 @@ drydock.yaml            Drydock deploy manifest (portal is source of truth; do n
 | Report wording and layout | `src/lib/markdown.ts` (`PREAMBLE`, `buildReport`) |
 | Folder writing / permissions | `src/lib/fs.ts` |
 | Side panel UI + settings toggles | `src/sidepanel/App.tsx` |
-| Connected projects (list, switch, forget) | `Project` in `src/lib/types.ts` + `project:*` in `src/background/index.ts` + the folder strip in `App.tsx` |
-| Directory handles (panel-only storage) | `loadHandles`/`saveHandle`/`dropHandle` in `src/lib/fs.ts` |
+| The gripe folder (pick, remember, permissions) | `src/lib/fs.ts` + the folder line in `App.tsx` |
 | Closing a gripe (write → copy → close) | `finish()` in `App.tsx` + `session:close` in `src/background/index.ts` |
+| Panel type scale / responsive layout | the token block at the top of `src/sidepanel/styles.css` |
+| Panel layout harness (no extension needed) | `scripts/preview.mjs` + `scripts/preview/*.html` |
 | Panel design tokens | `src/sidepanel/styles.css` `:root` |
 | Console/network capture | `public/injected.js` |
 | Permissions, icons, manifest | `public/manifest.json` |
 | Video walkthrough: capture, dedup, thinning, marks, pointer | `src/sidepanel/recorder.ts` |
-| Absolute project path (ask once per project, resolve) | `Project.path` + `sessionFolder` in `src/lib/fs.ts` |
+| Absolute folder path (ask once, resolve) | `loadProjectPath`/`sessionFolder` in `src/lib/fs.ts` |
 | Walkthrough transcription (on-device Whisper) | `src/sidepanel/transcribe.ts` + `transcribeWorker.ts` |
 | Walkthrough contact sheets | `src/sidepanel/grids.ts` |
 | Walkthrough report / MANIFEST / recording.json | `src/lib/markdown.ts` (`buildRecordingReport`…) |
@@ -174,8 +178,7 @@ with the panel closed still land: they flush to disk the next time the panel ope
 | `Note` | `lib/types.ts` | The persisted record; images become blob keys, `written` tracks disk state |
 | `TargetInfo` | `lib/types.ts` | Selector, tag, text, interesting attrs, opening HTML, box — the agent-facing description |
 | `PageEvent` | `lib/types.ts` | One console/network line with `ts`, matched to a note by time window |
-| `Session` | `lib/types.ts` | Named bucket of notes; `slug` **is** the folder name. `projectId` binds it to a folder for good, `closed` means handed off. `kind: 'recording'` + `recording: RecordingMeta` make it a walkthrough |
-| `Project` | `lib/types.ts` | A connected repo: id, folder name, absolute path. Metadata only — the handle lives in `kv.projectHandles` |
+| `Session` | `lib/types.ts` | Named bucket of notes; `slug` **is** the folder name, `closed` means handed off. `kind: 'recording'` + `recording: RecordingMeta` make it a walkthrough |
 | `RecordingMeta` / `RecordingFrame` | `lib/types.ts` | A walkthrough: timed keyframes (with dedup `dist`), transcript segments, events, webm ref |
 | `Settings` | `lib/types.ts` | `autoDictate`, `spotlight`, `chain`, `autoSend`, `autoSendMs`, `lang` |
 | `Request` / `ContentCommand` | `lib/messages.ts` | The full message protocol, both directions |
@@ -188,15 +191,15 @@ with the panel closed still land: they flush to disk the next time the panel ope
 | `notes` | `id`, index `bySession` | `Note` records; sorted by `index` on read |
 | `blobs` | `"<noteId>:full"` / `"<noteId>:crop"` | PNG blobs (never data URLs — memory) |
 | `blobs` | `"<sessionId>:frame:<n>"` / `"<sessionId>:video"` | Walkthrough keyframe JPEGs + the raw webm |
-| `kv` | string | `activeSessionId`, `activeProjectId`, `projects` (`Project[]`, worker-owned), `projectHandles` (`Record<id, FileSystemDirectoryHandle>`, panel-owned), `settings`, `recordingActive` |
+| `kv` | string | `activeSessionId`, `settings`, `projectDir` (a live `FileSystemDirectoryHandle`), `projectPath` (the absolute path the user typed — FSA won't give it up), `recordingActive` |
 
 Invariants: `session.noteCount` is the source of the next note `index` and of the `NN-` filename
 prefix; deleting a note does **not** renumber. Deleting a session cascades to its notes and blobs but
-never touches files already on disk. A session writes into `session.projectId`'s folder for its whole
-life — the *active* project only decides where the **next** session goes.
+never touches files already on disk. `activeSessionId` is `null` right after a gripe is closed, and
+the next capture mints a fresh session.
 
-`kv.projectDir` / `kv.projectPath` are the pre-0.5 single-folder keys; the panel migrates them into
-project #1 on first run and deletes them.
+0.5's `projects` / `projectHandles` / `activeProjectId` keys are read once by `loadProjectDir()`,
+collapsed back into `projectDir` + `projectPath`, and deleted.
 
 ## Systems
 
@@ -232,8 +235,8 @@ and `unhandledrejection` listeners, and `postMessage`s each event. The content s
 each capture. **Lives in:** `public/injected.js` + the `recentEvents` block in `src/content/index.ts`.
 
 ### Walkthrough report shape (what the reading agent actually gets)
-`report.md` opens with the folder's **absolute path** (asked once per project, `Project.path` — FSA
-won't tell us), then the **contact sheets**, then a timeline that inlines a still only inside a spoken window
+`report.md` opens with the folder's **absolute path** (asked once, kv `projectPath` — FSA won't tell
+us), then the **contact sheets**, then a timeline that inlines a still only inside a spoken window
 (2s before → 2.5s after a line, cap 16; marks and frame 1 always; a spread of 12 when nobody talked)
 and collapses every other frame to one line per run naming its sheet. Spoken lines render as ranges
 (`0:23–0:31`) and name the frames they cover. The report says whether a human confirmed the
@@ -257,28 +260,15 @@ recording.json + MANIFEST.txt + frames/ + grids/ + walkthrough.webm. **Lives in:
 `src/sidepanel/recorder.ts`, `transcribe.ts`, `transcribeWorker.ts`, `grids.ts`, spec in
 `features/video-walkthrough.md`.
 
-### Projects (one folder per repo)
-A gripe is per project and the next one is usually a different repo, so connected folders are a list:
-`kv.projects` holds `Project` metadata in the worker, `kv.projectHandles` holds the live
-`FileSystemDirectoryHandle`s in the panel. They're split because `chrome.runtime.sendMessage`
-JSON-serializes and a handle can't survive that — only IndexedDB's structured clone keeps it alive.
-Switching (`▾` on the folder strip) is one click: no picker, no re-typed path, permission usually
-still granted. Each new session is stamped with `projectId`, and **writes follow the session's
-project, not the active one**. The 0.4 single folder migrates into project #1 on first run.
-**Lives in:** `src/lib/fs.ts` (handles), the `project:*` cases in `src/background/index.ts`
-(metadata), the folder strip + `.projects` list in `src/sidepanel/App.tsx`.
-
 ### Closing a gripe
 `done` in the footer: copy the agent prompt (first — it needs the click's user activation), wait out
 any flush in flight, write whatever is still pending, then `session:close` marks the session `closed`
-and clears `activeSessionId`. The panel goes empty and the next capture mints a fresh session in
-whatever project is active then; with more than one connected, the project list opens so the next
-gripe can land elsewhere. Activating a closed session reopens it. **Lives in:** `finish()` in
-`src/sidepanel/App.tsx` + `session:close` in `src/background/index.ts`.
+and clears `activeSessionId`. The panel goes empty and the next capture mints a fresh session.
+Activating a closed session reopens it. **Lives in:** `finish()` in `src/sidepanel/App.tsx` +
+`session:close` in `src/background/index.ts`.
 
 ### Disk write-through
-An effect in `App.tsx` fires whenever any note has `written: false`: resolve the session's project,
-pull blobs, rewrite the *whole* session folder (markdown is a few KB; existing images are simply
+An effect in `App.tsx` fires whenever any note has `written: false`: pull blobs, rewrite the *whole* session folder (markdown is a few KB; existing images are simply
 overwritten), then mark the notes written. A `flushing` ref guards against re-entry. The effects only
 ever run for the **active** session, so the two paths that write a non-active one — `finish()` and a
 late Whisper transcript — call `flushNotes`/`flushRecording` themselves. **Lives in:**
@@ -336,9 +326,7 @@ callers get it from `sessionFolder(session, root, dir)`.
 - **The directory picker can be refused inside the side panel** on some Chrome builds; the panel
   catches that and offers "Open in tab →", which shares the same IndexedDB.
 - **A `FileSystemDirectoryHandle` can never travel in a `chrome.runtime` message** — messages are
-  JSON-serialized. That's why the worker owns project *metadata* and the panel owns the handles.
-- **Writes follow `session.projectId`, never the active project.** Switching folders mid-session must
-  not redirect a bundle that's already half on disk.
+  JSON-serialized. Only the panel can hold one, straight out of IndexedDB.
 - **The flush effects only see the active session.** Anything that writes a session after it stops
   being active (`finish()`, a late Whisper pass) has to call the flush helpers directly.
 - **File System Access permission must be re-requested from a user gesture** after a restart — the
@@ -365,10 +353,11 @@ callers get it from `sessionFolder(session, root, dir)`.
 - **Not built** — automated tests, linting, CI, packaging for the Web Store, full-page (scrolling)
   screenshots, i18n beyond the `settings.lang` passthrough, a settings surface for `autoSendMs`
   (the value is in `Settings` but has no UI).
-- **Reshaped 2026-07-26 (0.5.0)** — folders are per project. Connected repos are a remembered list
-  switched from the folder strip, a session is bound to the one it started in, and `done` closes a
-  gripe (write → copy prompt → clear the session) so the next one starts clean somewhere else.
-  Working doc: `plans/2026-07-26-multi-project.md`.
+- **Reshaped 2026-07-26 (0.6.0)** — one gripe folder, and a panel that scales. 0.5's per-project
+  folder list was reverted the same day (see decisions.md); what survives is `done`, which closes a
+  gripe (write → copy prompt → clear the session) so the next one starts clean. The panel's sizes all
+  come from a token scale that steps up twice and caps the column at 900px, because at 1200px wide it
+  read as fine print in a row of empty slabs. Working doc: `plans/2026-07-26-multi-project.md`.
 - **Reshaped 2026-07-26 (0.4.0)** — the first AI agent to read a real walkthrough bundle sent ranked
   feedback; all seven points are acted on (report leads with contact sheets, rationed stills, speech
   windows, transcript-review flag + `Alt+Shift+M` marks, origin-scoped telemetry, pointer on every

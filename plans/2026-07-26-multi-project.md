@@ -1,59 +1,50 @@
-# Per-project folders + closing a gripe
+# Per-project folders → reverted; one folder + a panel that scales
 
-> Status: **done** · 2026-07-26 · shipped as 0.5.0
+> Status: **done** · 2026-07-26 · per-project folders shipped as 0.5.0 and were reverted in 0.6.0
 
-## The problem
+## What was asked, and what came back
 
-A gripe is per project, but the extension has exactly one folder: `kv.projectDir` (a handle) plus
-`kv.projectPath` (the absolute path the user typed). Finishing a bundle for repo A and starting one
-for repo B costs: `✕` to forget the folder → **Connect folder** → the OS picker → re-typing the
-absolute path — every single switch. And there is no "this one is done" gesture at all: the session
-stays active, so the next note lands in the bundle you already handed off.
+The ask: "after the session is done it should be like close this gripe and start a new one. the next
+one won't be in the same folder. it's per project… need a better solution here."
 
-## Option considered and rejected: one central gripes directory
+**0.5.0 answer:** connected folders became a list. `Project` metadata in the worker, handles in the
+panel, a switcher on the folder strip, `Session.projectId` binding each gripe to the folder it
+started in, plus `done` to close a gripe.
 
-Sal's second idea: stop writing into the repo, write everything into a generic directory
-(`~/gripes/…`) and hand the agent a long absolute path.
+**The verdict, same day:** "ooh i kinda hate it. forget all that. forget folders. theres only one
+gripe folder. you name it how you want." Plus a screenshot of the panel ~1200px wide: "the ui is so
+small and clunky."
 
-Rejected. The whole value is that the bundle lands **inside the repo the agent is already running
-in** — Claude Code reads `gripes/<slug>/report.md` as a relative path in its own working directory
-and never asks permission. A central directory makes every single handoff a cross-directory read
-the agent has to be granted. It solves the switching cost by giving up the reason the tool exists.
+Fair. The list turned a set-once setting into a thing to maintain — a switcher, per-project paths, a
+session→folder binding, a migration — and the cost it removed (re-picking a folder when you change
+repos) was smaller than the cost it added.
 
-Note the implemented design is a superset: a project is just "a folder you connected", so anyone who
-wants the central-directory behavior can connect one folder and never add a second.
+## 0.6.0
 
-## What ships
+**One folder.** Back to `kv.projectDir` + `kv.projectPath`. `loadProjectDir()` reclaims whichever 0.5
+project was active — with its typed path — and deletes the three 0.5 keys, so a profile that ran 0.5
+for an afternoon doesn't re-pick anything. `Project`, `project:*`, `Session.projectId` and the
+handles map are gone.
 
-**Projects.** A remembered list of folders instead of one. Switching is one click in the folder
-strip — no picker, no re-typing the path, permission usually still granted from last time.
+**`done` survives.** It was the real ask underneath the folder question: write the bundle, copy the
+prompt, mark the session `closed`, clear the active session so the next capture starts fresh.
 
-- `Project { id, name, path, addedAt, lastUsedAt }` — plain metadata, owned by the worker in
-  `kv.projects`, active one in `kv.activeProjectId`, shipped to the panel in `state:get`.
-- The `FileSystemDirectoryHandle`s live in `kv.projectHandles` (`Record<id, handle>`), written only
-  by the panel. They *have* to be split out: `chrome.runtime.sendMessage` JSON-serializes, so a
-  handle can never travel in a message, but IndexedDB structured-clones it fine.
-- `Session.projectId` is stamped at creation. **Write-through follows the session's project, not the
-  active one** — a session always writes home, even after you switch away.
-- Migration: the legacy `projectDir` + `projectPath` become project #1 and every pre-existing session
-  is stamped with its id (`project:add … adopt: true`), then the legacy keys are deleted.
+**The panel scales.** Every size in `styles.css` now comes from a token scale stepped at 480px and
+760px (`--fs-xl…--fs-2xs`, `--gut`, `--strip`, `--thumb-*`, `--frame-min`); the column caps at 900px
+and centers instead of running full-bleed; the folder line moved into the session block (it was
+repeating the slug shown directly above it); CTA + modes become one control bar past 520px; the
+keyframe grid is `auto-fill`. Two strips removed, ~4px added to everything that was fine print.
 
-**Closing a gripe.** `done` in the footer: flush everything to disk → copy the agent prompt → mark
-the session `closed` → clear the active session. The next capture starts a fresh session in whatever
-project is active then. It replaces `+` — "close this one and start the next" was what `+` was
-actually for.
+**`npm run preview`.** A zero-dep static server + two harness pages (`scripts/preview/`) that render
+the *built* panel with the chrome APIs stubbed and IndexedDB seeded, one iframe per width. Writing it
+paid for itself immediately: session rows' `×` had never had a CSS rule and was rendering as a stray
+block below the meta line — invisible in every screenshot taken so far because nobody had opened the
+switcher.
 
-- Activating a closed session reopens it (`closed` cleared) — no separate reopen affordance.
-- Switching project activates that project's newest *open* session, or none. Without `closed`,
-  coming back to a project would silently resume the bundle you already handed off.
+## Gotchas that carried over
 
-**Session list** is scoped to the active project, with the others behind one row.
-
-## Ordering / gotchas hit
-
-- `done` must not close before the write lands: the flush bodies are extracted from the two effects
-  into `flushNotes` / `flushRecording`, `done` waits for the in-flight flush then runs its own. The
-  flush effects only ever run for the *active* session, so anything pending at close time would
-  otherwise never be written.
-- Same trap for Whisper: it finishes after the session may already be closed, so `runWhisper` flushes
-  the session by id itself instead of relying on the effect.
+- `done` must not close before the write lands: the flush bodies live in `flushNotes` /
+  `flushRecording`, and `finish()` waits out any in-flight flush then runs its own. The flush effects
+  only ever watch the *active* session.
+- Same trap for Whisper, which finishes long after the gripe may be closed — `runWhisper` flushes by
+  session id itself.

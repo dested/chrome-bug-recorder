@@ -2,7 +2,7 @@
 
 > The source of truth for how Gripe **looks and feels**. Follow it for anything visual.
 > Keep it current as part of the definition of done for any UI change.
-> Last updated: 2026-07-26 (0.5.0).
+> Last updated: 2026-07-26 (0.6.0).
 
 ## North star
 
@@ -33,7 +33,11 @@ emoji, drop shadows on flat elements, an accent that shows up on things that are
 | File | `src/sidepanel/styles.css` | CSS template string at the top of `src/content/ui.ts` |
 | Built with | React + a plain stylesheet | Hand-built DOM in a shadow root |
 | Background | Opaque `--bg` (#0a0a0c) | Translucent `.glass` over the host page |
-| Sizing | 13px body — it lives in a ~360px rail | 12.5–15px — it floats over someone's app |
+| Sizing | A token scale that steps at 480/760px | 12.5–15px — it floats over someone's app |
+
+Check panel work at more than one width before calling it done: `npm run build && npm run preview`
+serves it with the chrome APIs stubbed, one iframe per width
+(`localhost:8777/gallery.html?w=380,560,900&mode=rec|notes|empty|nofolder`).
 
 The two stylesheets are **deliberately separate and deliberately duplicated**. The overlay can't
 import the panel's CSS (shadow-root isolation is the whole point), so the shared values are copied.
@@ -50,7 +54,7 @@ Grotesque for display, IBM Plex Mono for facts. Everything else here still appli
 | Token | Panel value | Overlay value | Use |
 | --- | --- | --- | --- |
 | Canvas | `--bg: #0a0a0c` | — (host page shows through) | Panel background |
-| Surface / raise | `--raise: #131316` | `--glass: rgba(12,12,14,.88)` | Footer, folder strip, session list / glass panels |
+| Surface / raise | `--raise: #131316` | `--glass: rgba(12,12,14,.88)` | Footer, session list, path input / glass panels |
 | Hairline | `--line: rgba(255,255,255,.08)` | `--line: rgba(255,255,255,.10)` | 1px dividers and borders |
 | Hairline strong | `--line-strong: rgba(255,255,255,.14)` | — | Hover borders |
 | Text | `--text: #f2efec` | `--text: #f2efec` | Primary copy |
@@ -79,17 +83,36 @@ mirror it. If the accent ever changes, five places move: `types.ts`, `styles.css
 | Mono (`--mono`) | `ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace` | Selectors, paths, times, counts, filenames, `kbd` |
 | Wordmark | Body stack, 10.5px / 700 / `.14em` / uppercase | "GRIPE" in the panel header only |
 
-Sizes in use — panel: 15px (session name, composer input), 13.5px (armed CTA), 12.5–13px (body, note
-text), 11.5px (mode buttons), 10.5px (metadata, wordmark), 9.5–10px (badges, toggle labels). Overlay:
-15px composer, 12.5px hint, 11.5px tool buttons, 10.5–11px `kbd` and meta. Weights are 400 / 600 /
-650 / 700 — nothing else.
+**The panel has no hardcoded sizes.** Everything comes from six type tokens and four rhythm tokens on
+`:root` in `styles.css`, stepped at two breakpoints — the panel is a 360px rail most of the time and a
+1200px window some of the time, and at the wide end fixed 10.5px metadata read as fine print.
+
+| Token | <480px | ≥480px | ≥760px | Used for |
+| --- | --- | --- | --- | --- |
+| `--fs-xl` | 16 | 18 | 21 | Gripe name, recording clock |
+| `--fs-lg` | 13.5 | 14.5 | 16 | The armed CTA |
+| `--fs-md` | 12.5 | 13.5 | 14.5 | Body, note text, transcript, primary button |
+| `--fs-sm` | 11.5 | 12.5 | 13.5 | Mode buttons, links, chips |
+| `--fs-xs` | 10.5 | 11.5 | 12.5 | Paths, summaries |
+| `--fs-2xs` | 9.5 | 10.5 | 11 | Badges, toggle labels, wordmark |
+| `--gut` | 14 | 20 | 26 | Horizontal padding on every strip |
+| `--strip` | 11 | 13 | 16 | Vertical padding on every strip |
+| `--thumb-w/h` | 62×42 | 86×58 | 110×74 | Note thumbnails |
+| `--frame-min` | 104 | 150 | 210 | Keyframe grid column floor (`auto-fill`) |
+
+Past 760px the content column stops at `--max: 900px` and centers; prose blocks cap at 62–78ch. Two
+layout changes ride the same breakpoints: the CTA and the four mode buttons become one control bar at
+≥520px, and the keyframe grid is `auto-fill` rather than three fixed columns.
+
+Overlay (unchanged, fixed sizes): 15px composer, 12.5px hint, 11.5px tool buttons, 10.5–11px `kbd`
+and meta. Weights are 400 / 600 / 650 / 700 — nothing else.
 
 ### Spacing, shape, elevation
 
 | Token | Value | Use |
 | --- | --- | --- |
-| Panel gutter | `14px` horizontal on every strip | Header, session, folder, controls, notes, footer |
-| Strip padding | `9–13px` vertical | Denser than a web app on purpose |
+| Panel gutter | `var(--gut)` on every strip | Header, session, controls, notes, footer |
+| Strip padding | `var(--strip)` vertical | Denser than a web app on purpose |
 | Radius — pill | `999px` | Hint chip, toast, toggles, flash |
 | Radius — glass panel | `14px` | Composer bar, hint chip container |
 | Radius — control | `8–10px` | Buttons, arm CTA, note textarea |
@@ -105,10 +128,10 @@ text), 11.5px (mode buttons), 10.5px (metadata, wordmark), 9.5–10px (badges, t
 
 ```
 header      wordmark + note count
-session     name input + session switcher chevron ▾   (+ expandable session list)
-folder      status dot + path + path?/Reconnect + project switcher ▾
-            (+ expandable project list, + the absolute-path input)
-controls    armed CTA + Region/Draw/Page + shortcut hint line
+session     name input + switcher chevron ▾
+            folder line: status dot + path + path?/Reconnect/✕ (or Choose folder)
+            (+ expandable session list, + the absolute-path input)
+controls    armed CTA + Region/Draw/Page/Record + shortcut hint line
 notes       flex:1, scrolls; note rows, expandable full screenshot
 toggles     pill row: auto-mic, auto-send, spotlight, stay armed
 footer      Copy prompt (primary) + .zip + done
@@ -129,8 +152,9 @@ for region/draw, composer bar bottom-center at `min(680px, 100vw - 40px)`, toast
 | `.bar` (composer) | `content/ui.ts` | Mic + textarea + interim line + meta row + countdown |
 | `.toast` | `content/ui.ts` | "Note N saved" + filename, 2.4s |
 | `.note` row | `sidepanel/App.tsx` + `styles.css` | Thumbnail, index badge, text, meta, error count, hover ✕ |
-| `.srow` / `.prow` | `sidepanel/App.tsx` | Session and project rows: same anatomy — accent left rail when active, mono sub-line, hover-only `×`. A `.srow.closed` mutes its name and carries a `closed` tag |
-| `.projects` + `.padd` | `sidepanel/App.tsx` | The connected-folder list under the folder strip; `.padd` is its full-width "+ connect another folder" row |
+| `.srow` | `sidepanel/App.tsx` | A gripe in the switcher: accent left rail when active, mono sub-line, hover-only `×`. `.srow.closed` mutes its name and carries a `closed` tag |
+| `.kill` | `styles.css` | *Every* destructive control: absolute, invisible until its row is hovered, accent on hover. Contexts set position only — never re-declare the rest |
+| `.link.hot` | `sidepanel/App.tsx` | The one accent-tinted link: **Choose folder**, shown only when nothing is connected |
 | `.toggle` pill | `sidepanel/App.tsx` | Settings switch: dot + label, accent-soft when on |
 | `.flash` | `sidepanel/App.tsx` | Inverted transient toast, 1.7s, rises 8px |
 
@@ -173,9 +197,8 @@ Keyboard hints are always a `<kbd>`: mono, 10–10.5px, translucent fill, hairli
 - **Error / degraded** — never a red banner. It's the `.where` line in the composer turning `.warn`
   (`#ffb9a5`) with plain lowercase text: `capture failed: …`, `microphone blocked on this site — type
   instead`. In the panel it's the `.flash` pill.
-- **Connection status** — one 6px dot: `--faint` (nothing connected), `--accent` (connected, needs
-  permission), `#58c98a` (writing). It appears twice: on the folder strip, where it reflects the
-  *current session's* project, and on every row of the project list.
+- **Connection status** — one 6px dot on the folder line: `--faint` (nothing connected), `--accent`
+  (connected, needs permission), `#58c98a` (writing).
 - **Finished** — closing a gripe empties the panel back to its empty state; that blankness is the
   confirmation, plus one `.flash` (`gripe closed — prompt copied`). Nothing turns green, nothing is
   ticked.
@@ -187,14 +210,17 @@ Keyboard hints are always a `<kbd>`: mono, 10–10.5px, translucent fill, hairli
 Lowercase, terse, second person, no punctuation at the end of short strings. The UI talks like a
 colleague watching over your shoulder.
 
-Good: `Click what's wrong` · `Drag a box around it` · `no project folder connected` ·
+Good: `Click what's wrong` · `Drag a box around it` · `no folder yet — nothing lands on disk` ·
 `prompt copied — paste into Claude Code` · `can't record on this page` · `no comment — screenshot only`
 
 Bad: `Please select an element to continue.` · `Error: Operation failed` · `Successfully saved!` ·
 `Settings` as a heading · anything with an exclamation mark.
 
-Buttons are verbs or nouns, never sentences: `Connect folder`, `Reconnect`, `.zip`, `done`,
-`Copy prompt for Claude Code`, `+ connect another folder`. Toggle labels are hyphenated lowercase: `auto-mic`, `auto-send`,
+A recorded session is a **gripe** in the UI (`Untitled gripe`, `no gripes yet`, `gripe closed`), even
+though the code and the specs call it a session.
+
+Buttons are verbs or nouns, never sentences: `Choose folder`, `Reconnect`, `.zip`, `done`,
+`Copy prompt for Claude Code`. Toggle labels are hyphenated lowercase: `auto-mic`, `auto-send`,
 `spotlight`, `stay armed`.
 
 ## Don'ts
@@ -217,3 +243,6 @@ Buttons are verbs or nouns, never sentences: `Connect folder`, `Reconnect`, `.zi
 - ❌ **Decorative animation.** If it loops, it means "live." If it drains, it means "about to commit."
 - ❌ **Title Case, exclamation marks, or "Successfully".**
 - ❌ **Growing the panel's vertical chrome.** Notes get the space; every strip above them is fixed.
+- ❌ **A hardcoded `px` font-size or padding in `styles.css`.** Use a token, or add one. A literal size
+  is a size that stays tiny at 1200px wide, which is exactly the bug 0.6 fixed.
+- ❌ **Full-bleed content at wide widths.** The column caps at `--max` and centers.
