@@ -1,0 +1,409 @@
+/* The walkthrough distillation machine — a scripted, looping recreation of a
+   recording session. All state is a pure function of the loop clock inside
+   recorder-demo.tsx; this file is just the skin. */
+
+.rec {
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  background: #0d0d10;
+  overflow: hidden;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+}
+
+.rec-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.rec-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(255, 92, 57, 0.35);
+  background: var(--color-accent-soft);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--color-accent-text);
+}
+
+.rec-pill.is-idle {
+  border-color: var(--color-line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-muted);
+}
+
+.rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: pulse-ring 1.6s cubic-bezier(0.2, 0.8, 0.3, 1) infinite;
+}
+
+.rec-head-note {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.rec-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+  gap: 0;
+}
+
+@media (max-width: 900px) {
+  .rec-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ————— left: the screen being recorded ————— */
+
+.rec-screen-wrap {
+  padding: 20px;
+  border-right: 1px solid var(--color-line);
+}
+
+@media (max-width: 900px) {
+  .rec-screen-wrap {
+    border-right: none;
+    border-bottom: 1px solid var(--color-line);
+  }
+}
+
+.rec-screen {
+  position: relative;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: #101014;
+  padding: 18px 20px;
+  min-height: 218px;
+  overflow: hidden;
+}
+
+.rec-screen h5 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.rec-screen-rows {
+  margin-top: 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+}
+
+.rec-screen-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 12px;
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+
+.rec-screen-row + .rec-screen-row {
+  border-top: 1px solid var(--color-line);
+}
+
+.rec-screen-row .rec-price {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  transition: color 0.3s;
+}
+
+.rec-price.is-wrong {
+  color: var(--color-accent-text);
+}
+
+.rec-coupon {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rec-coupon-field {
+  flex: 1;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-ink);
+  min-height: 27px;
+}
+
+.rec-coupon-btn {
+  font-size: 11px;
+  font-weight: 600;
+  color: #0a0a0c;
+  background: #e8e4e0;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+.rec-toast {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-accent-text);
+  border: 1px solid rgba(255, 92, 57, 0.35);
+  background: rgba(255, 92, 57, 0.12);
+  border-radius: 6px;
+  padding: 5px 10px;
+  transition: opacity 0.25s, translate 0.25s;
+}
+
+/* capture flash when a frame is kept */
+.rec-flash {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  pointer-events: none;
+  transition: opacity 0.35s;
+}
+
+/* ————— sampler strip ————— */
+
+.rec-strip-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.rec-strip-label .rec-verdict {
+  transition: color 0.2s;
+}
+
+.rec-verdict.is-keep {
+  color: var(--color-accent-text);
+}
+
+.rec-strip {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+  height: 22px;
+  align-items: flex-end;
+}
+
+.rec-chip {
+  width: 9px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  height: 10px;
+  transition: height 0.18s, background 0.18s;
+}
+
+.rec-chip.is-kept {
+  background: var(--color-accent);
+  height: 22px;
+}
+
+.rec-counters {
+  display: flex;
+  gap: 18px;
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+
+.rec-counters b {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.rec-counters .rec-kept-n {
+  color: var(--color-accent-text);
+}
+
+/* ————— right: what gripe is building ————— */
+
+.rec-out {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rec-out-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.rec-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.rec-cell {
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  position: relative;
+  overflow: hidden;
+  opacity: 0.35;
+  transition: opacity 0.3s, transform 0.3s, border-color 0.3s;
+  transform: scale(0.96);
+}
+
+.rec-cell.is-filled {
+  opacity: 1;
+  transform: none;
+  border-color: var(--color-line-strong);
+  background: #101014;
+}
+
+.rec-cell.is-new {
+  border-color: rgba(255, 92, 57, 0.6);
+}
+
+.rec-cell-bars {
+  padding: 6px;
+}
+
+.rec-cell-bars i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  margin-bottom: 4px;
+}
+
+.rec-cell-ts {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--color-faint);
+}
+
+/* transcript */
+
+.rec-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 118px;
+}
+
+.rec-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  opacity: 0;
+  translate: 0 6px;
+  transition: opacity 0.3s, translate 0.3s;
+}
+
+.rec-line.is-in {
+  opacity: 1;
+  translate: 0 0;
+}
+
+.rec-line .rec-ts {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-text);
+  flex: none;
+}
+
+.rec-line .rec-text {
+  color: var(--color-muted);
+  transition: color 0.3s;
+}
+
+.rec-line.is-final .rec-text {
+  color: var(--color-ink);
+}
+
+.rec-line .rec-tick {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-success);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.rec-line.is-final .rec-tick {
+  opacity: 1;
+}
+
+.rec-line.is-event .rec-text {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-accent-text);
+}
+
+/* whisper sweep + output flash */
+
+.rec-whisper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-accent-text);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.rec-whisper.is-on {
+  opacity: 1;
+}
+
+.rec-whisper-bar {
+  flex: 1;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rec-whisper-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent), rgba(255, 92, 57, 0.4));
+  transition: width 0.2s linear;
+}
+
+.rec-done {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-ink);
+  border: 1px solid rgba(255, 92, 57, 0.35);
+  background: var(--color-accent-soft);
+  border-radius: 8px;
+  padding: 10px 14px;
+  opacity: 0;
+  translate: 0 6px;
+  transition: opacity 0.35s, translate 0.35s;
+}
+
+.rec-done.is-in {
+  opacity: 1;
+  translate: 0 0;
+}

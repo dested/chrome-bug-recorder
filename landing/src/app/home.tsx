@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { CaptureDemo } from '~/components/capture-demo'
+import { RecorderDemo } from '~/components/recorder-demo'
 import { Reveal } from '~/lib/reveal'
 
 const GITHUB = 'https://github.com/dested/gripe'
@@ -274,30 +275,32 @@ function Output() {
   )
 }
 
-const WALKTHROUGH_STATS: Array<[string, string]> = [
-  ['whisper-small.en', 'transcription runs on your machine, in a worker'],
-  ['64×64 dedup', 'only frames where something actually changed survive'],
-  ['≤150 frames', 'an hour of poking around distills to what happened'],
-  ['3×3 grids', 'contact sheets so an agent scans the video in seconds'],
-]
-
 function Walkthroughs() {
   return (
     <section id="walkthroughs" className="border-t border-line">
       <div className="mx-auto max-w-6xl px-6 py-24">
         <Reveal>
           <Eyebrow n="02">video walkthroughs</Eyebrow>
-          <H2>record the screen. ship the distilled version.</H2>
+          <H2>your agent can&rsquo;t watch video. record anyway.</H2>
           <p className="mt-4 max-w-2xl text-[15px] leading-relaxed text-muted">
-            Hit record, click through the whole flow, and narrate as you go. Gripe samples the
-            screen twice a second and keeps only the frames where something changed, stamps your
-            words onto the timeline, and transcribes the audio on-device with Whisper when you stop.
-            What lands in the repo isn&rsquo;t a video your agent can&rsquo;t watch — it&rsquo;s a
-            timeline it can actually read.
+            Hit record and just use the app, narrating as you go. Twice a second Gripe fingerprints
+            the screen and throws away every frame where nothing changed —{' '}
+            <span className="text-ink">the screenshots take themselves</span>, only at the moments
+            that matter. Your words are stamped onto the timeline where you said them, console and
+            network errors land where they fired, and when you stop, Whisper re-transcribes the
+            audio on your machine and quietly fixes the rough draft. Watch it work:
           </p>
         </Reveal>
 
-        <Reveal delay={120} className="mt-12">
+        <Reveal delay={120} className="mt-10">
+          <RecorderDemo />
+          <p className="mt-3 text-center font-mono text-[11px] text-faint">
+            an hour of poking around distills to ~150 screenshots, a stamped transcript, and one
+            report.md
+          </p>
+        </Reveal>
+
+        <Reveal delay={100} className="mt-14">
           <div className="overflow-hidden rounded-2xl border border-line bg-raise/60 shadow-[0_24px_60px_-12px_rgba(0,0,0,.7)]">
             {/* the video slot — replace public/promo.mp4 with your own recording
                 and this section doesn't change */}
@@ -315,15 +318,6 @@ function Walkthroughs() {
             60 seconds · rendered with remotion
           </p>
         </Reveal>
-
-        <div className="mt-12 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
-          {WALKTHROUGH_STATS.map(([stat, desc], i) => (
-            <Reveal key={stat} delay={i * 70} className="bg-bg p-5">
-              <p className="font-mono text-[13px] font-semibold text-accent-text">{stat}</p>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{desc}</p>
-            </Reveal>
-          ))}
-        </div>
 
         <Reveal delay={100} className="mt-8">
           <pre className="overflow-x-auto rounded-xl border border-line bg-[#0d0d10] p-5 font-mono text-[12px] leading-6 text-muted">
