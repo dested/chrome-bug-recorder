@@ -39,6 +39,10 @@ The two stylesheets are **deliberately separate and deliberately duplicated**. T
 import the panel's CSS (shadow-root isolation is the whole point), so the shared values are copied.
 Change a token in one, change it in the other.
 
+(A third surface — the marketing site in `landing/` — mirrors these tokens in
+`landing/src/styles/app.css` and is allowed two web fonts the extension is not: Bricolage
+Grotesque for display, IBM Plex Mono for facts. Everything else here still applies to it.)
+
 ## Tokens
 
 ### Color

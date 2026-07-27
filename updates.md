@@ -2,6 +2,15 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-26 — landing page at gripe.dested.com: sal-starter port + Remotion promo
+Asked: build a full landing page from the sal-starter template, go hard like the README, make a
+Remotion promo video, host it at gripe.dested.com via Drydock. Done: `landing/` (Express 5 + Vite
+SSR skeleton from the template, tRPC/Prisma/auth stripped — see decisions.md), page in the
+extension's visual language with a pure-CSS looping capture demo in the hero; `landing/video/`
+Remotion project renders the 60s promo to `landing/public/promo.mp4` (drop a real recording there
+to replace it); deployed via Drydock (rootDir `landing`, no db, dnsZone dested.com).
+Touched: landing/**, landing/video/**, cliffnotes.md, decisions.md, ui.md.
+
 ## 2026-07-26 — rename the repo folder to gripe without losing Claude Code history
 Asked: rename the folder to `gripe`, keep every Claude Code session, and make it repeatable for the
 next 5-6 renames. Found: Claude Code keys everything to the project's absolute path — the

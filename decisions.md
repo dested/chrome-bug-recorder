@@ -4,6 +4,21 @@
 > Newest first. Entries dated 2026-07-25 were backfilled on 2026-07-26 by reading the shipped code —
 > the reasoning is reconstructed from the code's own comments and structure.
 
+## 2026-07-26 — Landing site: sal-starter skeleton with the data layer stripped, hosted in-repo via Drydock rootDir
+**Why:** Sal asked for a landing page "using the sal-starter template" hosted at gripe.dested.com.
+The template ships Express 5 + Vite SSR + React Router 7 + tRPC + Prisma 7 + better-auth; a
+marketing page has no users, no API, and no database, so `landing/` ports the SSR skeleton
+faithfully (server.ts, logger, entry-server, routes, tsconfig, prettier) and drops
+tRPC/Prisma/better-auth/TanStack entirely — the Drydock deploy then provisions no Postgres
+(`database: false`). It lives as a subfolder of this repo (Drydock rootDir `landing`) instead of a
+second repo so the extension and its site version together. Fonts deviate from ui.md's
+system-stack rule on purpose: the marketing surface carries Bricolage Grotesque (display) + IBM
+Plex Mono (facts), self-hosted via fontsource; the extension itself stays web-font-free.
+**Rejected:** keeping auth/db "because the template has them" (dead weight + a $0 database on the
+box), a separate gripe-landing repo (two repos to version one product), reusing the extension's
+hand-written CSS approach (Tailwind v4 is the template's styling layer and the page is 500+ lines
+of one-off marketing layout).
+
 ## 2026-07-26 — Dedup recalibrated for screens: 64×64 cells + absolute count (departs from the reference, with evidence)
 **Why:** a real MacBook recording (game dev page, 55s, 111 samples) kept exactly ONE frame. Running
 the same webm through the *original* claude-real-video tool reproduced it: 22 extracted → 1 kept,
