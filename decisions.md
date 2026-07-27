@@ -4,6 +4,26 @@
 > Newest first. Entries dated 2026-07-25 were backfilled on 2026-07-26 by reading the shipped code —
 > the reasoning is reconstructed from the code's own comments and structure.
 
+## 2026-07-26 — The walkthrough report leads with contact sheets and rations stills, after an agent read one
+**Why:** the first AI agent handed a real bundle came back with ranked feedback, and it is the only
+evidence we have about the actual reader. Three findings drove the shape: (1) 68 inlined keyframes for
+6 spoken lines was ~100k tokens of near-identical stills of which about four mattered, while the 3×3
+grids gave it the whole walkthrough for an eighth of the cost — so grids are now the primary section
+and stills are inlined only inside a spoken window (2s before → 2.5s after the line, cap 16), with the
+skipped frames collapsed to one line per run naming their sheet and the counts printed so partial
+coverage never reads as full; (2) speech stamped at its start correlated to the wrong frames — every
+line now renders as a range and names the frames it covers; (3) the report was unfindable on disk
+(`test1/gripes/…` vs `G:\junk\test1\gripes\…`, six tool calls of `find`), so the panel asks once for
+the absolute path and every report opens with it. Also from the same list: telemetry is scoped to the
+recorded tab's origin (the one captured error was another tab's YouTube ping), frames carry the mouse
+(crosshair + selector — "these over here" was unresolvable), and `Alt+Shift+M` marks a frame mid-
+sentence because ASR ate "tile" and turned a one-tile bug into a one-pixel one.
+**Rejected:** loosening the dedup thresholds instead (they were bought with evidence on 2026-07-26 and
+the frames themselves are fine — it's the *report* that over-served them), auto-correcting suspicious
+ASR words (a confident wrong guess is worse than a flagged one; the report now states whether a human
+checked the transcript and the panel nags until they do), deriving the absolute path from the
+directory handle (the File System Access API does not expose it, by design).
+
 ## 2026-07-26 — Landing site: sal-starter skeleton with the data layer stripped, hosted in-repo via Drydock rootDir
 **Why:** Sal asked for a landing page "using the sal-starter template" hosted at gripe.dested.com.
 The template ships Express 5 + Vite SSR + React Router 7 + tRPC + Prisma 7 + better-auth; a

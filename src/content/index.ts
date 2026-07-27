@@ -20,6 +20,7 @@ function boot() {
   const PAGE_EVENT = 'gripe:page-event';
   const EVENT_WINDOW_MS = 3 * 60 * 1000;
   const MAX_EVENTS_PER_NOTE = 12;
+  const POINTER_MS = 120; // pointer reports while recording — the frame sampler runs at 500ms
 
   let overlay: Overlay | null = null;
   let phase: 'idle' | 'aiming' | 'composing' = 'idle';
@@ -63,6 +64,7 @@ function boot() {
         .sendMessage({
           type: 'recording:event',
           event: { level: data.level, message: data.message, detail: data.detail, ts: data.ts },
+          origin: location.origin,
         })
         .catch(() => {});
     }
@@ -72,6 +74,57 @@ function boot() {
     const since = Math.max(lastNoteAt, Date.now() - EVENT_WINDOW_MS);
     return events.filter((e) => e.ts >= since).slice(-MAX_EVENTS_PER_NOTE);
   }
+
+  // ── pointer trail (recording only) ──────────────────────────────────────
+  /**
+   * "These over here" is unresolvable in a screen recording without a pointer, so
+   * while a walkthrough runs every tab reports where the mouse is and what it's
+   * over. The selector walk is the expensive part, so it only reruns when the
+   * element under the cursor actually changes.
+   */
+  let pointerAt = 0;
+  let pointerEl: Element | null = null;
+  let pointerSelector: string | undefined;
+  let pointerText: string | undefined;
+
+  window.addEventListener(
+    'mousemove',
+    (event: MouseEvent) => {
+      if (!recordingActive || phase !== 'idle') return;
+      const now = Date.now();
+      if (now - pointerAt < POINTER_MS) return;
+      pointerAt = now;
+
+      const el = document.elementFromPoint(event.clientX, event.clientY);
+      if (el !== pointerEl) {
+        pointerEl = el;
+        pointerSelector = el ? selectorFor(el) : undefined;
+        const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        pointerText = text || undefined;
+      }
+
+      void chrome.runtime
+        .sendMessage({
+          type: 'recording:pointer',
+          origin: location.origin,
+          sample: {
+            ts: now,
+            x: event.clientX,
+            y: event.clientY,
+            sx: event.screenX,
+            sy: event.screenY,
+            vw: window.innerWidth,
+            vh: window.innerHeight,
+            sw: window.screen.width,
+            sh: window.screen.height,
+            selector: pointerSelector,
+            text: pointerText,
+          },
+        })
+        .catch(() => {});
+    },
+    { capture: true, passive: true },
+  );
 
   // ── element description ─────────────────────────────────────────────────
   const INTERESTING_ATTRS = [

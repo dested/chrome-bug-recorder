@@ -1,11 +1,13 @@
 /**
  * Contact sheets, ported from claude-real-video's make_grids. A model reading
  * consecutive frames side by side in one image follows motion and progression
- * far better than the same frames seen one at a time.
+ * far better than the same frames seen one at a time — the first agent to read a
+ * real bundle called these the highest-value artifact in it, at an eighth of the
+ * tokens, which is why report.md now leads with them.
  */
 
-const COLS = 3;
-const ROWS = 3;
+import { GRID_COLS as COLS, GRID_ROWS as ROWS } from '../lib/types';
+
 const CELL_W = 480;
 const LABEL_H = 22;
 const GRID_QUALITY = 0.85;

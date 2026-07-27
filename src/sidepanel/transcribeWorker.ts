@@ -22,7 +22,7 @@ export interface WorkerIn {
 
 export type WorkerOut =
   | { type: 'progress'; stage: 'download' | 'model' | 'transcribe'; pct: number }
-  | { type: 'done'; segments: { t: number; text: string }[] }
+  | { type: 'done'; segments: { t: number; d?: number; text: string }[] }
   | { type: 'error'; message: string };
 
 env.allowLocalModels = false;
@@ -59,10 +59,16 @@ async function transcribe(device: 'webgpu' | 'wasm', audio: Float32Array) {
   const asr = await build(device);
   post({ type: 'progress', stage: 'transcribe', pct: -1 });
   const out = await asr(audio, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true });
-  return (out.chunks ?? []).map((chunk) => ({
-    t: Math.round((chunk.timestamp?.[0] ?? 0) * 1000),
-    text: chunk.text.trim(),
-  }));
+  return (out.chunks ?? []).map((chunk) => {
+    const start = Math.round((chunk.timestamp?.[0] ?? 0) * 1000);
+    const end = chunk.timestamp?.[1] == null ? null : Math.round(chunk.timestamp[1] * 1000);
+    return {
+      t: start,
+      // A line covers the seconds it took to say — the report shows a window, not a point.
+      ...(end && end > start ? { d: end - start } : {}),
+      text: chunk.text.trim(),
+    };
+  });
 }
 
 self.onmessage = async (e: MessageEvent<WorkerIn>) => {

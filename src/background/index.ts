@@ -167,6 +167,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'arm-element') void arm('element');
   if (command === 'arm-page') void arm('page');
+  // The recorder lives in the panel; a command only reaches the worker, so relay it.
+  if (command === 'mark-frame') {
+    chrome.runtime.sendMessage({ type: 'recording:mark' }).catch(() => {});
+  }
 });
 
 chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
@@ -216,6 +220,25 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         const remaining = await listSessions();
         await kv.set(ACTIVE_SESSION, remaining[0]?.id ?? null);
         await updateBadge();
+        await broadcast();
+        return { ok: true };
+      }
+      case 'session:rewrite': {
+        const session = await getSession(message.id);
+        if (!session) return { ok: false };
+        for (const note of await listNotes(message.id)) {
+          if (note.written) await putNote({ ...note, written: false });
+        }
+        if (session.recording) {
+          await putSession({
+            ...session,
+            recording: {
+              ...session.recording,
+              rev: (session.recording.rev ?? 0) + 1,
+              written: false,
+            },
+          });
+        }
         await broadcast();
         return { ok: true };
       }
@@ -347,6 +370,8 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
             ...rec,
             transcript: message.transcript,
             transcriber: 'whisper',
+            // New words nobody has read yet — an earlier confirmation doesn't carry over.
+            reviewed: false,
             rev: (rec.rev ?? 0) + 1,
             written: false,
           },
@@ -354,7 +379,19 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         await broadcast();
         return { ok: true };
       }
+      case 'recording:reviewed': {
+        const session = await getSession(message.id);
+        if (!session?.recording) return { ok: false };
+        const rec = session.recording;
+        await putSession({
+          ...session,
+          recording: { ...rec, reviewed: true, rev: (rec.rev ?? 0) + 1, written: false },
+        });
+        await broadcast();
+        return { ok: true };
+      }
       case 'recording:event':
+      case 'recording:pointer':
         // The side panel consumes these via its own onMessage listener; the
         // background only needs to not treat them as unknown.
         return { ok: true };

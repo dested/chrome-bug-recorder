@@ -2,6 +2,25 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-26 — act on the first agent's feedback about a real walkthrough bundle (0.4.0)
+Asked: an AI agent read a `gripes/` walkthrough and sent seven ranked notes; make the changes. Done,
+all seven: (1) panel asks once for the connected folder's absolute path (kv `projectPath`,
+`sessionFolder()`), every report opens with it and the copy-prompt uses it, `session:rewrite` catches
+up what's on disk; (2) report.md now leads with the contact sheets and inlines a still only inside a
+spoken window (cap 16, marks + frame 1 always, spread of 12 when silent), the rest collapsed to one
+line per run naming its sheet, counts printed; (3) spoken lines render as ranges — Whisper end-times
+land in `TranscriptSegment.d`, estimated otherwise — and name the frames they cover; (4)
+`recording:reviewed` + a panel nag, and the report states whether a human checked the transcript;
+`Alt+Shift+M` (`mark-frame` command → worker → panel) forces a keyframe, ★ in the panel and report,
+never thinned; (5) telemetry scoped to the recorded tab's origin, drops counted and reported; (6)
+content scripts forward pointer samples (120ms, selector cached per element), frames carry
+`FramePointer` and get an accent crosshair when the capture's aspect ratio identifies it as
+screen or tab; (7) debug-HUD tip documented. Typecheck + both builds clean; report rendering smoke-
+tested against a synthetic 68-frame recording (68 keyframes → 16 stills).
+Touched: types/messages/format/fs/markdown (lib), background, content, recorder.ts, grids.ts,
+transcribeWorker.ts, App.tsx, styles.css, manifest+package (0.4.0), README, cliffnotes kit,
+plans/2026-07-26-agent-feedback.md.
+
 ## 2026-07-26 — landing page at gripe.dested.com: sal-starter port + Remotion promo
 Asked: build a full landing page from the sal-starter template, go hard like the README, make a
 Remotion promo video, host it at gripe.dested.com via Drydock. Done: `landing/` (Express 5 + Vite

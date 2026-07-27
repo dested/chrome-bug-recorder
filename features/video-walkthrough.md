@@ -47,36 +47,69 @@ capture, kept 1 frame of 22 (see `decisions.md`, 2026-07-26).
   every file on disk rewrites. Whisper failing (no mic, silence, offline first run) just leaves the
   Web Speech lines — honest wording in MANIFEST either way. A quiet status line in the recording
   view shows model download / transcription progress.
-- While recording, every tab's content script forwards console/network events to the panel; each is
-  woven into the timeline at its offset.
+- While recording, every tab's content script forwards console/network events **and pointer
+  samples** (120ms throttle) to the panel, each tagged with its own origin. The recorder keeps only
+  what came from the origin of the tab that was in front at Record — the first bundle an agent read
+  had exactly one captured error and it was a YouTube log ping from another tab. Dropped events are
+  counted and reported, never silently discarded. No scope (a `chrome://` tab was in front) keeps
+  everything.
+- Each kept frame carries the pointer: the selector + text of the element under the cursor, always,
+  and an accent crosshair **drawn into the JPEG** when the coordinates can be mapped. `getDisplayMedia`
+  never says what it handed us, so the frame's aspect ratio is the evidence — screen-shaped maps from
+  `screenX/Y`, viewport-shaped maps from `clientX/Y`, anything else (window capture, second monitor)
+  draws nothing rather than a lie.
+- **`Alt+Shift+M` marks the moment.** The command only reaches the worker, which relays it to the
+  panel; the recorder forces the next sample through regardless of dedup (`reason: 'mark'`). Marked
+  frames survive thinning, always inline in the report with a ★, and show a ★ badge in the panel.
+  `M` in a focused panel does the same.
 - On stop (button or Chrome's own "Stop sharing"): one final frame candidate runs through normal
   dedup, then if >150 frames survived they are **thinned uniformly** (survivors stay spread across
   the recording, timestamps intact, files renumbered).
 - The session appears as a `kind: 'recording'` session named "Walkthrough" (rename like any session)
   and flushes to `gripes/<slug>/` when a folder is connected:
-  `report.md` (frame-anchored timeline for the agent) · `transcript.txt` (`[m:ss] line`) ·
-  `recording.json` (frames with `dist`/`reason`, transcript, events, `sampled`) · `MANIFEST.txt`
-  (crv-style stats + inline transcript) · `frames/` · `grids/grid_NN.jpg` (3×3 contact sheets,
-  480px cells, filename label bar) · `walkthrough.webm` (raw video, always kept).
+  `report.md` (contact sheets, then the timeline) · `transcript.txt` (`[m:ss–m:ss] line`) ·
+  `recording.json` (frames with `dist`/`reason`/`pointer`, transcript windows, events, scope,
+  `sampled`) · `MANIFEST.txt` (crv-style stats + inline transcript) · `frames/` ·
+  `grids/grid_NN.jpg` (3×3 contact sheets, 480px cells, filename label bar) · `walkthrough.webm`
+  (raw video, always kept).
+- **`report.md` leads with the contact sheets and rations stills.** A full still is inlined only for
+  frames inside a spoken window (2s before the line through 2.5s after it ends), for marked frames,
+  and for the first frame — capped at 16, or a spread of 12 when nobody narrated. Every other frame
+  is listed by filename in one collapsed line per run, with the sheet it lives on. The counts are
+  printed (`16 of 68 keyframes inlined below`) so nothing looks like full coverage when it isn't.
+- **A spoken line is a window, not an instant.** Whisper's chunk end-time lands in
+  `TranscriptSegment.d` (word count × 380ms when absent); the report renders `0:23–0:31` and names
+  the frames the line is about, because people narrate what just happened.
+- **The report states how much to trust the words.** Until the human clicks "looks right" in the
+  panel (`recording:reviewed`), report.md and MANIFEST.txt say the transcript was not checked and
+  tell the agent to believe the frames where they disagree. A Whisper pass landing later resets the
+  flag — new words nobody has read.
+- **Every report opens with the folder's absolute path**, which the panel asks for once and keeps in
+  kv (`projectPath`); the File System Access API will not tell us. Changing it marks the active
+  session unwritten (`session:rewrite`) so what's on disk catches up. Unset, the line falls back to
+  the project-relative path plus "search for that directory name".
 - The panel's recording view shows duration/keyframes/lines/errors, a 3-col frame grid with mm:ss
   badges (click to expand), and the transcript.
-- Copy prompt and `.zip` work exactly like note sessions; the prompt tells the agent it's reading a
-  narrated recording and to look at every image in order.
+- Copy prompt and `.zip` work exactly like note sessions; the prompt carries the absolute folder
+  path and tells the agent to read the contact sheets first.
+- **Recording a canvas app? Leave the debug HUD visible.** Documented in the README: coordinates and
+  state flags burned into the pixels are what let a reading agent tie a frame to something greppable.
 - Deleting a recording session cascades its frame and video blobs; files on disk are kept.
 
 ## Touchpoints
 
 | Part | File |
 | --- | --- |
-| Capture, dedup, thinning, dictation stamps | `src/sidepanel/recorder.ts` |
+| Capture, dedup, thinning, marks, pointer + crosshair | `src/sidepanel/recorder.ts` |
 | Whisper pass (decode → worker → segments) | `src/sidepanel/transcribe.ts` + `transcribeWorker.ts` |
 | ort wasm copy step (build) | `scripts/copy-ort.mjs` → `public/ort/` (gitignored) |
 | Contact sheets (`make_grids` port) | `src/sidepanel/grids.ts` |
 | Record button, HUD, recording view, flush, zip | `src/sidepanel/App.tsx` + `styles.css` |
 | Timeline report, transcript, json, MANIFEST | `src/lib/markdown.ts` |
 | `writeRecordingSession` | `src/lib/fs.ts` |
-| Session minting, recording-active flag, event relay | `src/background/index.ts` |
-| Event forwarding while recording | `src/content/index.ts` |
+| Session minting, recording-active flag, mark relay | `src/background/index.ts` |
+| Event + pointer forwarding while recording | `src/content/index.ts` |
+| Absolute project path (ask, store, resolve) | `src/lib/fs.ts` (`loadProjectPath`, `sessionFolder`) |
 | `RecordingMeta` / `RecordingFrame` / `TranscriptSegment` | `src/lib/types.ts` |
 
 ## Data
@@ -106,12 +139,20 @@ version bump). Blobs: `<sessionId>:frame:<index>` (JPEG) and `<sessionId>:video`
       a small input at record time could feed it into MANIFEST.txt and report.md.
 - [ ] Frame width is 1920 (vs the reference's 640) — right for screen text, but nobody has measured
       token cost on a really long walkthrough.
+- [ ] Window captures can't place the crosshair (aspect matches neither screen nor viewport). The
+      selector still ships; a `getDisplayMedia` surface hint or a calibration frame might fix it.
+- [ ] The mark hotkey stamps a frame, not a transcript line. "This frame ←" attached to the sentence
+      being spoken would be stronger still.
 
 ## How to verify
 
-Build, reload the extension, connect a folder. Record ~30s: switch tabs twice (A-B-A — expect no
-third capture of A), scroll once, talk through it, trigger a console error. Stop. Check
-`gripes/<slug>/`: frame count sane (neither 1 nor one per 500ms — localized motion must register),
-timestamps in filenames, error in the timeline, grids present, webm plays. Then wait for the
-whisper status line to finish (first run downloads ~250MB) and confirm transcript.txt rewrote with
-noticeably better text and MANIFEST says `Whisper small.en, on-device`.
+Build, reload the extension, connect a folder, paste its absolute path when the panel asks. Record
+~30s: switch tabs twice (A-B-A — expect no third capture of A), scroll once, talk through it, hit
+`Alt+Shift+M` mid-sentence, trigger a console error in the recorded tab **and** one in another tab.
+Stop. Check `gripes/<slug>/`: report.md opens with the absolute path, contact sheets come before the
+timeline, far fewer stills than keyframes with the count stated, the marked frame has a ★, spoken
+lines read `0:23–0:31` and name their frames, the other tab's error is absent and the drop count is
+reported, and a crosshair is drawn on the frames (full-screen or tab capture; a window capture
+correctly draws none but still names the selector). Then wait for the whisper status line to finish
+(first run downloads ~250MB) and confirm transcript.txt rewrote with noticeably better text, MANIFEST
+says `Whisper small.en, on-device`, and the panel is asking you to confirm the transcript again.

@@ -32,6 +32,7 @@ declare global {
 
 export const REPORT_DIR = 'gripes';
 const DIR_KEY = 'projectDir';
+const PATH_KEY = 'projectPath';
 
 export function fsaSupported(): boolean {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -55,6 +56,37 @@ export async function loadProjectDir(): Promise<FileSystemDirectoryHandle | null
 
 export async function forgetProjectDir() {
   await kv.delete(DIR_KEY);
+  await kv.delete(PATH_KEY);
+}
+
+/**
+ * The File System Access API refuses to tell us where the folder is on disk, and a
+ * report the agent can't locate cost the first one six tool calls of `find`. So the
+ * panel asks once, we remember it, and every report opens with the answer.
+ */
+export async function loadProjectPath(): Promise<string> {
+  return (await kv.get<string>(PATH_KEY)) ?? '';
+}
+
+export async function saveProjectPath(path: string): Promise<string> {
+  const clean = path.trim().replace(/[\\/]+$/, '');
+  if (clean) await kv.set(PATH_KEY, clean);
+  else await kv.delete(PATH_KEY);
+  return clean;
+}
+
+/** Best-known location of a session's folder: absolute when the user told us, project-relative otherwise. */
+export function sessionFolder(
+  session: Session | null | undefined,
+  root: string,
+  handle: FileSystemDirectoryHandle | null,
+): string {
+  const parts = [REPORT_DIR, ...(session ? [session.slug] : [])];
+  if (root) {
+    const sep = root.includes('\\') ? '\\' : '/';
+    return [root, ...parts].join(sep);
+  }
+  return [...(handle ? [handle.name] : []), ...parts].join('/');
 }
 
 export type DirPermission = 'granted' | 'prompt' | 'denied';
@@ -96,6 +128,7 @@ export async function writeSession(
   session: Session,
   notes: Note[],
   images: Map<string, NoteImages>,
+  folder?: string,
 ): Promise<string[]> {
   const dir = await sessionDir(root, session);
   const wroteImagesFor: string[] = [];
@@ -108,8 +141,12 @@ export async function writeSession(
     wroteImagesFor.push(note.id);
   }
 
-  await writeFile(dir, 'report.md', new Blob([buildReport(session, notes)], { type: 'text/markdown' }));
-  await writeFile(dir, 'notes.json', new Blob([buildNotesJson(session, notes)], { type: 'application/json' }));
+  await writeFile(dir, 'report.md', new Blob([buildReport(session, notes, folder)], { type: 'text/markdown' }));
+  await writeFile(
+    dir,
+    'notes.json',
+    new Blob([buildNotesJson(session, notes, folder)], { type: 'application/json' }),
+  );
   return wroteImagesFor;
 }
 
@@ -124,6 +161,7 @@ export async function writeRecordingSession(
   frames: Map<number, Blob>,
   video: Blob | undefined,
   grids: Blob[],
+  folder?: string,
 ): Promise<void> {
   const rec = session.recording;
   if (!rec) return;
@@ -134,10 +172,22 @@ export async function writeRecordingSession(
     // frame.file is session-relative (frames/03-0125.jpg); the handle wants the leaf.
     if (blob) await writeFile(framesDir, frame.file.split('/').pop()!, blob);
   }
-  await writeFile(dir, 'report.md', new Blob([buildRecordingReport(session, rec)], { type: 'text/markdown' }));
+  await writeFile(
+    dir,
+    'report.md',
+    new Blob([buildRecordingReport(session, rec, folder)], { type: 'text/markdown' }),
+  );
   await writeFile(dir, 'transcript.txt', new Blob([buildTranscriptTxt(rec)], { type: 'text/plain' }));
-  await writeFile(dir, 'recording.json', new Blob([buildRecordingJson(session, rec)], { type: 'application/json' }));
-  await writeFile(dir, 'MANIFEST.txt', new Blob([buildManifestTxt(session, rec)], { type: 'text/plain' }));
+  await writeFile(
+    dir,
+    'recording.json',
+    new Blob([buildRecordingJson(session, rec, folder)], { type: 'application/json' }),
+  );
+  await writeFile(
+    dir,
+    'MANIFEST.txt',
+    new Blob([buildManifestTxt(session, rec, folder)], { type: 'text/plain' }),
+  );
   if (grids.length) {
     const gridsDir = await dir.getDirectoryHandle('grids', { create: true });
     for (const [i, grid] of grids.entries()) {
@@ -152,9 +202,11 @@ export async function deleteSessionFolder(root: FileSystemDirectoryHandle, sessi
   await reports.removeEntry(session.slug, { recursive: true });
 }
 
-export function displayPath(handle: FileSystemDirectoryHandle | null, session?: Session | null): string {
+export function displayPath(
+  handle: FileSystemDirectoryHandle | null,
+  session?: Session | null,
+  root = '',
+): string {
   if (!handle) return '';
-  const parts = [handle.name, REPORT_DIR];
-  if (session) parts.push(session.slug);
-  return parts.join('/');
+  return sessionFolder(session, root, handle);
 }

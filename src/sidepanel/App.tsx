@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CaptureMode, Note, PageEvent, Session, Settings } from '../lib/types';
+import type { CaptureMode, Note, PageEvent, PointerSample, Session, Settings } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import { send } from '../lib/messages';
 import { blobs } from '../lib/db';
@@ -10,8 +10,11 @@ import {
   forgetProjectDir,
   fsaSupported,
   loadProjectDir,
+  loadProjectPath,
   pickProjectDir,
   requestPermission,
+  saveProjectPath,
+  sessionFolder,
   writeRecordingSession,
   writeSession,
   type DirPermission,
@@ -27,7 +30,7 @@ import {
   buildTranscriptTxt,
 } from '../lib/markdown';
 import { blobBytes, makeZip, textBytes } from '../lib/zip';
-import { clockTime, dateTime, mmss, shortUrl } from '../lib/format';
+import { clockTime, dateTime, mmss, originOf, shortUrl } from '../lib/format';
 import { Recorder, type RecorderUpdate } from './recorder';
 import { makeGrids, type GridFrame } from './grids';
 import { transcribeRecording, type TranscribeProgress } from './transcribe';
@@ -45,12 +48,17 @@ export default function App() {
   const [state, setState] = useState<PanelState>(EMPTY);
   const [dir, setDir] = useState<FileSystemDirectoryHandle | null>(null);
   const [perm, setPerm] = useState<DirPermission>('prompt');
+  // What the user says the connected folder is on disk — FSA won't tell us, and the
+  // agent reading the report has to be able to find it.
+  const [root, setRoot] = useState('');
+  const [askRoot, setAskRoot] = useState(false);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [shortcut, setShortcut] = useState('');
+  const [markShortcut, setMarkShortcut] = useState('');
   const [showSessions, setShowSessions] = useState(false);
   const [recUpdate, setRecUpdate] = useState<RecorderUpdate | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -78,10 +86,21 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
-    const listener = (message: { type?: string }) => {
+    const listener = (message: { type?: string; origin?: string }) => {
       if (message?.type === 'state:changed') void refresh();
-      if (message?.type === 'recording:event' && recorderRef.current) {
-        recorderRef.current.addEvent((message as { event: PageEvent }).event);
+      const recorder = recorderRef.current;
+      if (!recorder) return;
+      // Telemetry and pointer both arrive from every tab; the recorder keeps only
+      // what came from the one being recorded.
+      if (message?.type === 'recording:event') {
+        recorder.addEvent((message as { event: PageEvent }).event, message.origin);
+      }
+      if (message?.type === 'recording:pointer') {
+        recorder.addPointer((message as { sample: PointerSample }).sample, message.origin);
+      }
+      if (message?.type === 'recording:mark') {
+        recorder.mark();
+        say('marked');
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -95,20 +114,35 @@ export default function App() {
   // Ask Chrome what the shortcut actually is — it differs per OS and the user
   // may have rebound it.
   useEffect(() => {
-    void chrome.commands
-      .getAll()
-      .then((commands) => setShortcut(commands.find((c) => c.name === 'arm-element')?.shortcut ?? ''));
+    void chrome.commands.getAll().then((commands) => {
+      setShortcut(commands.find((c) => c.name === 'arm-element')?.shortcut ?? '');
+      setMarkShortcut(commands.find((c) => c.name === 'mark-frame')?.shortcut ?? '');
+    });
   }, []);
 
   // ── project folder ────────────────────────────────────────────────────
   useEffect(() => {
     void (async () => {
+      const stored = await loadProjectPath();
+      setRoot(stored);
       const handle = await loadProjectDir();
       if (!handle) return;
       setDir(handle);
       setPerm(await checkPermission(handle));
+      if (!stored) setAskRoot(true); // asked once, then never again
     })();
   }, []);
+
+  const commitRoot = async (value: string) => {
+    const clean = await saveProjectPath(value);
+    setRoot(clean);
+    setAskRoot(false);
+    // The report opens with this path, so what's on disk is now stale.
+    if (clean && session) {
+      await send({ type: 'session:rewrite', id: session.id });
+      await refresh();
+    }
+  };
 
   const [pickerBlocked, setPickerBlocked] = useState(false);
 
@@ -119,6 +153,7 @@ export default function App() {
       setDir(handle);
       setPerm(await checkPermission(handle));
       setFlash(`connected to ${handle.name}`);
+      if (!root) setAskRoot(true); // the one moment they know the path by heart
     } catch (error) {
       // Some Chrome builds refuse the picker inside the side panel; the same
       // page in a tab shares this IndexedDB, so picking there works fine.
@@ -157,7 +192,7 @@ export default function App() {
             crop: note.cropFile ? await blobs.get(`${note.id}:crop`) : undefined,
           });
         }
-        await writeSession(dir, session, state.notes, images);
+        await writeSession(dir, session, state.notes, images, sessionFolder(session, root, dir));
         await send({ type: 'note:written', ids: pending.map((n) => n.id) });
         await refresh();
       } catch (error) {
@@ -167,7 +202,7 @@ export default function App() {
         flushing.current = false;
       }
     })();
-  }, [dir, perm, session, state.notes, refresh]);
+  }, [dir, perm, root, session, state.notes, refresh]);
 
   useEffect(() => {
     if (!dir || perm !== 'granted' || !session?.recording || session.recording.written) return;
@@ -186,7 +221,14 @@ export default function App() {
         const gridFrames = rec.frames
           .map((f) => ({ blob: frames.get(f.index), label: f.file.split('/').pop()! }))
           .filter((g): g is GridFrame => Boolean(g.blob));
-        await writeRecordingSession(dir, session, frames, video, await makeGrids(gridFrames));
+        await writeRecordingSession(
+          dir,
+          session,
+          frames,
+          video,
+          await makeGrids(gridFrames),
+          sessionFolder(session, root, dir),
+        );
         await send({ type: 'recording:written', id: session.id, rev: rec.rev ?? 0 });
         await refresh();
       } catch (error) {
@@ -196,7 +238,7 @@ export default function App() {
         flushingRec.current = false;
       }
     })();
-  }, [dir, perm, session, refresh]);
+  }, [dir, perm, root, session, refresh]);
 
   // ── thumbnails ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -288,7 +330,7 @@ export default function App() {
     try {
       await send({ type: 'recording:setActive', active: false });
       const meta = await r.stop();
-      await send({ type: 'recording:add', id: r.sessionId, name: 'Walkthrough', origin: '', meta });
+      await send({ type: 'recording:add', id: r.sessionId, name: 'Walkthrough', origin: r.scope, meta });
       say('walkthrough saved');
       await refresh();
       void runWhisper(r.sessionId).catch(() => {});
@@ -324,7 +366,15 @@ export default function App() {
   const startRecording = async () => {
     if (recorderRef.current) return;
     if (!(await ensureMic())) return;
-    const r = new Recorder({ onUpdate: setRecUpdate, onEnd: () => void stopRecording() }, state.settings.lang);
+    // The tab in front now is the app being walked through; everything else that
+    // logs an error for the next five minutes is somebody else's noise.
+    const tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    const scope = originOf(tab?.url ?? '');
+    const r = new Recorder(
+      { onUpdate: setRecUpdate, onEnd: () => void stopRecording() },
+      state.settings.lang,
+      scope.startsWith('http') ? scope : '',
+    );
     try {
       await r.start();
     } catch {
@@ -352,6 +402,14 @@ export default function App() {
         void send({ type: 'disarm' });
         return;
       }
+      // While a walkthrough runs the panel is a recorder, not an armer.
+      if (recorderRef.current) {
+        if (event.key.toLowerCase() !== 'm') return;
+        event.preventDefault();
+        recorderRef.current.mark();
+        say('marked');
+        return;
+      }
       const mode = MODE_KEYS[event.key.toLowerCase()];
       if (!mode) return;
       event.preventDefault();
@@ -369,8 +427,8 @@ export default function App() {
 
   const copyPrompt = async () => {
     if (!session) return;
-    await navigator.clipboard.writeText(agentPrompt(session, dir ? `${dir.name}/${REPORT_DIR}` : REPORT_DIR));
-    say('prompt copied — paste into Claude Code');
+    await navigator.clipboard.writeText(agentPrompt(session, sessionFolder(session, root, dir)));
+    say(root ? 'prompt copied — paste into Claude Code' : 'prompt copied — set the folder path for a clean handoff');
   };
 
   const exportZip = async () => {
@@ -512,9 +570,18 @@ export default function App() {
           {!fsaSupported()
             ? 'folder writing unavailable — use Export .zip'
             : dir
-              ? displayPath(dir, session)
+              ? displayPath(dir, session, root)
               : 'no project folder connected'}
         </span>
+        {dir && (
+          <button
+            className="link"
+            onClick={() => setAskRoot((v) => !v)}
+            title="The absolute path to this folder — your agent needs it to find the report"
+          >
+            {root ? 'path' : 'path?'}
+          </button>
+        )}
         {!dir && fsaSupported() && !pickerBlocked && (
           <button className="link" onClick={connect}>
             Connect folder
@@ -537,6 +604,23 @@ export default function App() {
         )}
       </div>
 
+      {dir && askRoot && (
+        <div className="rootpath">
+          <input
+            autoFocus
+            defaultValue={root}
+            spellCheck={false}
+            placeholder={`absolute path to ${dir.name}`}
+            onBlur={(e) => void commitRoot(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          />
+          <div className="why">
+            Chrome won't tell an extension where your folder is. Paste it once and every report
+            opens with a path your agent can use.
+          </div>
+        </div>
+      )}
+
       {recUpdate ? (
         <div className="controls">
           <div className="rec">
@@ -544,6 +628,7 @@ export default function App() {
             <span className="rec-time">{mmss(recUpdate.elapsedMs)}</span>
             <span className="rec-meta">
               {recUpdate.frameCount} frames · {recUpdate.segmentCount} lines
+              {recUpdate.markCount ? ` · ${recUpdate.markCount} marked` : ''}
             </span>
             <button className="rec-stop" onClick={() => void stopRecording()} disabled={stopping}>
               {stopping ? 'saving…' : 'Stop'}
@@ -562,6 +647,9 @@ export default function App() {
               {recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
             </div>
           )}
+          <div className="rec-hint">
+            <kbd>{markShortcut || 'Alt+Shift+M'}</kbd> marks the frame you're talking about
+          </div>
         </div>
       ) : (
         <div className="controls">
@@ -613,7 +701,10 @@ export default function App() {
                 onClick={() => setExpandedFrame(expandedFrame === f.index ? null : f.index)}
               >
                 {frameUrls[f.index] && <img src={frameUrls[f.index]} alt="" />}
-                <span className="rtime">{mmss(f.t)}</span>
+                <span className={`rtime ${f.reason === 'mark' ? 'marked' : ''}`}>
+                  {f.reason === 'mark' ? '★ ' : ''}
+                  {mmss(f.t)}
+                </span>
                 <button
                   className="kill"
                   title="Delete frame (file on disk is kept)"
@@ -632,6 +723,24 @@ export default function App() {
           {expandedFrame !== null && frameUrls[expandedFrame] && (
             <div className="shot">
               <img src={frameUrls[expandedFrame]} alt="" onClick={() => setExpandedFrame(null)} />
+            </div>
+          )}
+          {rec.transcript.length > 0 && !rec.reviewed && !whispering.current && (
+            <div className="rec-check">
+              <span>
+                <b>Read this back before you hand it off.</b> Speech recognition eats the words that
+                matter — a number or a noun it guesses wrong sends your agent to the wrong file.
+                Click any line to fix it.
+              </span>
+              <button
+                onClick={async () => {
+                  await send({ type: 'recording:reviewed', id: session!.id });
+                  await refresh();
+                  say('transcript confirmed');
+                }}
+              >
+                looks right
+              </button>
             </div>
           )}
           {rec.transcript.length > 0 && (

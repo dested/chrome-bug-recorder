@@ -48,6 +48,14 @@ export function mmssFile(ms: number): string {
   return `${pad(Math.floor(total / 60))}${pad(total % 60)}`;
 }
 
+/**
+ * A path an agent can paste as-is (`C:\…`, `/…`, `~/…`) versus one that only means
+ * something once you already know where the project is.
+ */
+export function looksAbsolute(path: string): boolean {
+  return /^([a-zA-Z]:[\\/]|[\\/]|~[\\/])/.test(path);
+}
+
 /** Path relative to the site root, for compact display. */
 export function shortUrl(url: string): string {
   try {

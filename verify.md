@@ -114,13 +114,26 @@ Touchpoints: `src/background/index.ts` (session handlers), the session UI in `sr
 ### 7. Export and handoff [cheap]
 Touchpoints: `src/lib/zip.ts`, `agentPrompt` in `src/lib/markdown.ts`
 
-1. **Copy prompt for Claude Code** → paste somewhere; expect `Read gripes/<slug>/report.md — …`
-   (prefixed with the connected folder name when one is connected).
+1. **Copy prompt for Claude Code** → paste somewhere; expect `Read <path>/report.md — …`, where
+   `<path>` is the absolute one you typed into the panel (folder-name-relative if you haven't).
 2. **.zip** → save it → the archive opens in your OS's unzipper and contains `<slug>/report.md`,
    `notes.json`, and every PNG. (A broken central directory here means `makeZip` regressed —
    Explorer/Finder will simply refuse to open it.)
 
-### 8. Hostile pages don't break [medium]
+### 8. Walkthrough bundle reads like a bundle [heavy — ask first]
+Touchpoints: `src/sidepanel/recorder.ts`, `src/lib/markdown.ts`, `features/video-walkthrough.md`
+
+1. **Record** → share a tab or the whole screen → talk through ~30s, hit `Alt+Shift+M` mid-sentence,
+   throw a console error in the recorded tab and another in a second tab → **Stop**.
+2. `report.md`: absolute path on line 5, contact sheets before the timeline, `N of M keyframes
+   inlined` with N well under M, the marked frame has a ★, spoken lines read `0:23–0:31` and name
+   their frames, the second tab's error is absent and counted as dropped.
+3. Frames: an accent crosshair sits where your mouse was (tab or full-screen capture; a *window*
+   capture correctly draws none), and inlined frames carry a `**pointer**` selector line.
+4. Panel nags to check the transcript → fix a word → click **looks right** → report.md rewrites and
+   now says the speaker corrected it.
+
+### 9. Hostile pages don't break [medium]
 Touchpoints: `src/content/index.ts` boot, `arm()` in `src/background/index.ts`
 
 1. Press the hotkey on a `chrome://` page → panel flashes "can't record on this page", nothing throws

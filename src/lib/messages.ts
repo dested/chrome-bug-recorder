@@ -1,4 +1,12 @@
-import type { CaptureMode, NoteDraft, PageEvent, RecordingMeta, Settings, TranscriptSegment } from './types';
+import type {
+  CaptureMode,
+  NoteDraft,
+  PageEvent,
+  PointerSample,
+  RecordingMeta,
+  Settings,
+  TranscriptSegment,
+} from './types';
 
 /** Content script / side panel → background. */
 export type Request =
@@ -10,6 +18,9 @@ export type Request =
   | { type: 'session:rename'; id: string; name: string }
   | { type: 'session:activate'; id: string }
   | { type: 'session:delete'; id: string }
+  // Mark everything in a session unwritten so the folder is rebuilt (the project
+  // path changed, and it's printed at the top of every report).
+  | { type: 'session:rewrite'; id: string }
   | { type: 'note:update'; id: string; text: string }
   | { type: 'note:delete'; id: string }
   | { type: 'note:written'; ids: string[] }
@@ -26,8 +37,12 @@ export type Request =
   | { type: 'recording:line:delete'; id: string; index: number }
   // The on-device Whisper pass finished and supersedes the Web Speech lines.
   | { type: 'recording:transcript'; id: string; transcript: TranscriptSegment[] }
-  // Content script → panel, relayed while a recording is live.
-  | { type: 'recording:event'; event: PageEvent };
+  // The human read the transcript back and confirmed it.
+  | { type: 'recording:reviewed'; id: string }
+  // Content script → panel, relayed while a recording is live. `origin` is the
+  // sender's own, so the panel can drop everything outside the recorded tab.
+  | { type: 'recording:event'; event: PageEvent; origin: string }
+  | { type: 'recording:pointer'; sample: PointerSample; origin: string };
 
 /** Background → content script. */
 export type ContentCommand =
@@ -39,7 +54,9 @@ export type ContentCommand =
 /** Background → side panel broadcast. */
 export type Broadcast =
   | { type: 'state:changed' }
-  | { type: 'note:captured'; noteId: string };
+  | { type: 'note:captured'; noteId: string }
+  // The mark hotkey fired. It's a command, so only the worker hears it.
+  | { type: 'recording:mark' };
 
 export function send<T = unknown>(message: Request): Promise<T> {
   return chrome.runtime.sendMessage(message) as Promise<T>;

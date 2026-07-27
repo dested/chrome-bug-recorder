@@ -82,6 +82,10 @@ npm install && npm run build
 icon to open the side panel, hit **Connect folder**, choose your repo. Done — Chrome
 remembers the folder across restarts.
 
+It then asks you to paste that folder's absolute path, once. Chrome refuses to tell an
+extension where a picked folder actually lives, and an agent that can't resolve the path
+burns half a dozen tool calls hunting for the report. Every report opens with the answer.
+
 Not connecting a folder is fine too; **.zip** in the footer downloads the same thing.
 
 ## Controls
@@ -90,6 +94,7 @@ Not connecting a folder is fine too; **.zip** in the footer downloads the same t
 | --- | --- |
 | `Alt+Shift+B` <sub>(`⌥⇧B` on macOS)</sub> | Arm the picker |
 | `Alt+Shift+N` | Quick note about the whole page |
+| `Alt+Shift+M` | Mark this moment — while recording a walkthrough |
 | `E` `R` `D` `P` | Element / Region / Draw / Page — or click them in the toolbar |
 | *say* **"save it"** | Commit the note by voice |
 | `Enter` | Commit it by hand |
@@ -115,6 +120,38 @@ it calls it off. Or just say *"save it."*
 Every session is kept. **▾** next to the name switches back to an old one — new notes
 append and `report.md` is rewritten in place. **+** starts a fresh one. Notes recorded
 while the panel is closed still land; they flush to disk when you open it.
+
+## Walkthroughs
+
+**Record** shares your screen and just listens. Keyframes are kept whenever the screen
+actually changes, the narration is transcribed on-device by Whisper after you stop, and the
+folder you get is built to be read by a model rather than watched:
+
+```
+2026-07-26-1130-walkthrough/
+├─ report.md          ← contact sheets first, then the timeline
+├─ grids/grid_01.jpg  ← 9 keyframes per sheet, the whole recording, cheap to read
+├─ frames/07-0023.jpg ← the timestamp is the filename
+├─ transcript.txt · recording.json · MANIFEST.txt
+└─ walkthrough.webm   ← the raw video, for you
+```
+
+`report.md` inlines a full still only where you were saying something about it — everything
+else is a one-liner pointing at the sheet it's on. Spoken lines carry a **window**
+(`0:23–0:31`) and name the frames they're about, because people narrate what just happened.
+Say "these over here" and it still resolves: every frame carries the mouse — drawn as a
+crosshair, and named by CSS selector under the image.
+
+Three things worth knowing:
+
+- **`Alt+Shift+M` marks the frame you're talking about.** Marked frames are never thinned and
+  always land in the report with a ★.
+- **Check the transcript before you hand it off.** The panel nags until you confirm it, and the
+  report tells the agent whether a human read it back — speech recognition eats exactly the
+  words that matter ("one tile" → "one pixel" is a 16× bug report).
+- **Recording a canvas or game?** Leave your debug HUD on screen. Coordinates, state flags, and
+  frame counters burned into the pixels are worth more to the reading agent than the art is —
+  it's how frames get tied to something it can grep for.
 
 ## How it works
 

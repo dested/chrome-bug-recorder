@@ -1,4 +1,12 @@
-import type { PageEvent, RecordingFrame, RecordingMeta, TranscriptSegment } from '../lib/types';
+import type {
+  FramePointer,
+  PageEvent,
+  PointerSample,
+  RecordingFrame,
+  RecordingMeta,
+  TranscriptSegment,
+} from '../lib/types';
+import { ACCENT } from '../lib/types';
 import { blobs } from '../lib/db';
 import { noteFileBase, mmssFile } from '../lib/format';
 import { Dictation } from '../content/speech';
@@ -17,6 +25,11 @@ import { Dictation } from '../content/speech';
  * A-B-A cutaways still don't re-capture A, a static screen still adds nothing.
  * Speech is stamped where the sentence started, not where recognition finally
  * admitted what it heard.
+ *
+ * Two things the reference has no equivalent for, both from an agent that read a
+ * real bundle: frames carry the mouse (drawn when the capture can be mapped, named
+ * by selector always — "these over here" is otherwise unresolvable), and the mark
+ * hotkey forces a keyframe mid-sentence.
  */
 
 const SAMPLE_MS = 500; // candidate cadence — stands in for the reference's scene-detect + 1s density floor
@@ -28,6 +41,8 @@ const MAX_FRAMES = 150; // uniform thin after dedup so survivors stay spread acr
 const MAX_FRAME_W = 1920;
 const JPEG_QUALITY = 0.9;
 const MAX_EVENTS = 200;
+const POINTER_STALE_MS = 2500; // a pointer older than this says nothing about this frame
+const MAP_TOLERANCE = 0.02; // aspect-ratio match required before we believe a coordinate mapping
 
 const MIME_TYPES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
 
@@ -37,6 +52,7 @@ export interface RecorderUpdate {
   elapsedMs: number;
   frameCount: number;
   segmentCount: number;
+  markCount: number;
   interim: string;
   micState: MicState;
 }
@@ -73,6 +89,53 @@ function toJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
+/**
+ * Where the pointer lands inside the captured frame, 0–1, or null when we can't
+ * be sure. getDisplayMedia never says *what* it handed us, so the frame's shape
+ * is the only evidence: a frame shaped like the screen is the screen (map from
+ * `screenX/Y`), a frame shaped like the viewport is the tab (map from
+ * `clientX/Y`). A window capture matches neither and a second monitor pushes
+ * screen coordinates out of range — both draw nothing rather than draw a lie.
+ * The selector still ships in the report either way.
+ */
+function mapPointer(p: PointerSample, w: number, h: number): { nx: number; ny: number } | null {
+  if (!w || !h) return null;
+  const aspect = w / h;
+  const fits = (a: number) => Math.abs(aspect - a) / a;
+  const options: { off: number; nx: number; ny: number }[] = [];
+  if (p.sw && p.sh) options.push({ off: fits(p.sw / p.sh), nx: p.sx / p.sw, ny: p.sy / p.sh });
+  if (p.vw && p.vh) options.push({ off: fits(p.vw / p.vh), nx: p.x / p.vw, ny: p.y / p.vh });
+  const best = options.filter((o) => o.off <= MAP_TOLERANCE).sort((a, b) => a.off - b.off)[0];
+  if (!best) return null;
+  const out = [best.nx, best.ny];
+  if (out.some((v) => v < -0.02 || v > 1.02)) return null;
+  return { nx: Math.min(1, Math.max(0, best.nx)), ny: Math.min(1, Math.max(0, best.ny)) };
+}
+
+/** The mouse, drawn onto the keyframe. Dark pass first so it survives a white page too. */
+function drawCrosshair(ctx: CanvasRenderingContext2D, x: number, y: number, width: number) {
+  const r = Math.max(9, Math.round(width / 110));
+  const arm = r * 2.2;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const [color, lineWidth] of [['rgba(0,0,0,0.6)', r / 2], [ACCENT, r / 4.5]] as const) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.moveTo(x - arm, y);
+    ctx.lineTo(x - r - 2, y);
+    ctx.moveTo(x + r + 2, y);
+    ctx.lineTo(x + arm, y);
+    ctx.moveTo(x, y - arm);
+    ctx.lineTo(x, y - r - 2);
+    ctx.moveTo(x, y + r + 2);
+    ctx.lineTo(x, y + arm);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export class Recorder {
   readonly sessionId: string;
 
@@ -89,8 +152,14 @@ export class Recorder {
   private utteranceStart: number | null = null;
   private segments: TranscriptSegment[] = [];
   private events: PageEvent[] = [];
+  /** Events from tabs that aren't the one being recorded — counted, not kept. */
+  private dropped = 0;
+  private pointer: PointerSample | null = null;
 
   private frames: RecordingFrame[] = [];
+  private marks = 0;
+  /** The mark hotkey fired: the next sample is kept whatever dedup thinks. */
+  private forced = false;
   /** Signatures of the KEPT frames only — that ring *is* the dedup window. */
   private sigs: Uint8ClampedArray[] = [];
   private sampled = 0;
@@ -108,6 +177,8 @@ export class Recorder {
   constructor(
     private handlers: RecorderHandlers,
     private lang: string,
+    /** Origin of the tab that was in front at Record. Telemetry from anywhere else is noise. */
+    readonly scope: string,
   ) {
     this.sessionId = crypto.randomUUID();
   }
@@ -199,9 +270,29 @@ export class Recorder {
     return this.stopped;
   }
 
-  addEvent(event: PageEvent) {
+  addEvent(event: PageEvent, origin?: string) {
+    if (!this.inScope(origin)) {
+      this.dropped++;
+      return;
+    }
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.shift();
+  }
+
+  addPointer(sample: PointerSample, origin?: string) {
+    if (this.inScope(origin)) this.pointer = sample;
+  }
+
+  /** Capture this instant no matter what dedup thinks — the human said it matters. */
+  mark() {
+    if (!this.stream) return;
+    this.forced = true;
+    if (!this.sampling) this.pending = this.sample();
+  }
+
+  /** No scope (a chrome:// tab was in front) keeps everything — better noisy than empty. */
+  private inScope(origin?: string): boolean {
+    return !this.scope || !origin || origin === this.scope;
   }
 
   // ── sampling ────────────────────────────────────────────────────────────
@@ -214,22 +305,28 @@ export class Recorder {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
 
     this.sampling = true;
+    const forced = this.forced;
+    this.forced = false;
     try {
       this.sampled++;
       sigCtx.drawImage(video, 0, 0, SIG_SIZE, SIG_SIZE);
       const sig = sigCtx.getImageData(0, 0, SIG_SIZE, SIG_SIZE).data;
 
       const t = this.elapsed();
+      const minDist = this.sigs.length
+        ? Math.min(...this.sigs.map((k) => cellDiff(sig, k)))
+        : undefined;
       let reason: RecordingFrame['reason'];
-      let dist: number | undefined;
-      if (!this.sigs.length) {
+      if (forced) {
+        reason = 'mark';
+        this.marks++;
+      } else if (minDist === undefined) {
         reason = 'start';
       } else {
-        const minDist = Math.min(...this.sigs.map((k) => cellDiff(sig, k)));
         if (minDist <= DEDUP_THRESHOLD) return;
         reason = 'change';
-        dist = minDist; // changed-cell count vs the closest kept frame
       }
+      const dist = minDist; // changed-cell count vs the closest kept frame
 
       const width = Math.min(video.videoWidth, MAX_FRAME_W);
       const height = Math.round((video.videoHeight * width) / video.videoWidth);
@@ -240,6 +337,10 @@ export class Recorder {
         frameCtx.imageSmoothingQuality = 'high';
       }
       frameCtx.drawImage(video, 0, 0, width, height);
+      const pointer = this.pointerNow(width, height);
+      if (pointer?.nx !== undefined && pointer.ny !== undefined) {
+        drawCrosshair(frameCtx, pointer.nx * width, pointer.ny * height, width);
+      }
 
       const index = this.frames.length + 1;
       await blobs.set(`${this.sessionId}:frame:${index}`, await toJpeg(canvas));
@@ -249,6 +350,7 @@ export class Recorder {
         file: `frames/${noteFileBase(index)}-${mmssFile(t)}.jpg`,
         reason,
         ...(dist === undefined ? {} : { dist }),
+        ...(pointer ? { pointer } : {}),
       });
       this.sigs.push(sig);
       if (this.sigs.length > DEDUP_WINDOW) this.sigs.shift();
@@ -256,6 +358,15 @@ export class Recorder {
     } finally {
       this.sampling = false;
     }
+  }
+
+  /** The pointer as it applies to the frame being written, if it's still fresh. */
+  private pointerNow(width: number, height: number): FramePointer | undefined {
+    const p = this.pointer;
+    if (!p || Date.now() - p.ts > POINTER_STALE_MS) return undefined;
+    const mapped = mapPointer(p, width, height);
+    if (!mapped && !p.selector) return undefined;
+    return { ...(mapped ?? {}), selector: p.selector, text: p.text };
   }
 
   // ── teardown ────────────────────────────────────────────────────────────
@@ -272,9 +383,13 @@ export class Recorder {
     await this.sample(); // the last screen state gets its fair shot through dedup, nothing more
 
     if (this.frames.length > MAX_FRAMES) {
-      const step = this.frames.length / MAX_FRAMES;
+      // Marked frames are the human pointing at something; they never get thinned.
       const keepIdx = new Set<number>();
-      for (let i = 0; i < MAX_FRAMES; i++) keepIdx.add(Math.floor(i * step));
+      this.frames.forEach((f, i) => f.reason === 'mark' && keepIdx.add(i));
+      const rest = this.frames.map((_, i) => i).filter((i) => !keepIdx.has(i));
+      const budget = Math.max(0, MAX_FRAMES - keepIdx.size);
+      const step = rest.length / budget;
+      for (let i = 0; i < budget; i++) keepIdx.add(rest[Math.floor(i * step)]);
       const survivors = this.frames.filter((_, i) => keepIdx.has(i));
       const dropped = this.frames.filter((_, i) => !keepIdx.has(i));
       await Promise.all(dropped.map((f) => blobs.delete(`${this.sessionId}:frame:${f.index}`)));
@@ -318,6 +433,8 @@ export class Recorder {
       frames: this.frames,
       transcript: this.segments,
       events: this.events,
+      ...(this.scope ? { eventScope: this.scope } : {}),
+      ...(this.dropped ? { droppedEvents: this.dropped } : {}),
       videoFile: 'walkthrough.webm',
       written: false,
     };
@@ -334,6 +451,7 @@ export class Recorder {
       elapsedMs: this.elapsed(),
       frameCount: this.frames.length,
       segmentCount: this.segments.length,
+      markCount: this.marks,
       interim: this.interim,
       micState: this.micState,
     });

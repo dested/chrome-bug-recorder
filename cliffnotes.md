@@ -113,7 +113,8 @@ drydock.yaml            Drydock deploy manifest (portal is source of truth; do n
 | Panel design tokens | `src/sidepanel/styles.css` `:root` |
 | Console/network capture | `public/injected.js` |
 | Permissions, icons, manifest | `public/manifest.json` |
-| Video walkthrough: capture, dedup, thinning | `src/sidepanel/recorder.ts` |
+| Video walkthrough: capture, dedup, thinning, marks, pointer | `src/sidepanel/recorder.ts` |
+| Absolute project path (ask once, resolve) | `src/lib/fs.ts` (`loadProjectPath`, `sessionFolder`) |
 | Walkthrough transcription (on-device Whisper) | `src/sidepanel/transcribe.ts` + `transcribeWorker.ts` |
 | Walkthrough contact sheets | `src/sidepanel/grids.ts` |
 | Walkthrough report / MANIFEST / recording.json | `src/lib/markdown.ts` (`buildRecordingReport`…) |
@@ -132,7 +133,8 @@ An extension has no URLs; it has surfaces. This is the equivalent map.
 | Panel-in-a-tab fallback | `chrome-extension://<id>/sidepanel.html` | same bundle | Used when the panel can't open the directory picker |
 
 **Commands** (`manifest.json` → rebindable at `chrome://extensions/shortcuts`):
-`arm-element` (`Alt+Shift+B`) and `arm-page` (`Alt+Shift+N`).
+`arm-element` (`Alt+Shift+B`), `arm-page` (`Alt+Shift+N`), and `mark-frame` (`Alt+Shift+M`, marks a
+keyframe while a walkthrough records — the worker relays it to the panel, which owns the recorder).
 
 ## Architecture
 
@@ -181,7 +183,7 @@ with the panel closed still land: they flush to disk the next time the panel ope
 | `notes` | `id`, index `bySession` | `Note` records; sorted by `index` on read |
 | `blobs` | `"<noteId>:full"` / `"<noteId>:crop"` | PNG blobs (never data URLs — memory) |
 | `blobs` | `"<sessionId>:frame:<n>"` / `"<sessionId>:video"` | Walkthrough keyframe JPEGs + the raw webm |
-| `kv` | string | `activeSessionId`, `settings`, `projectDir` (a live `FileSystemDirectoryHandle`) |
+| `kv` | string | `activeSessionId`, `settings`, `projectDir` (a live `FileSystemDirectoryHandle`), `projectPath` (the absolute path the user typed — FSA won't give it up), `recordingActive` |
 
 Invariants: `session.noteCount` is the source of the next note `index` and of the `NN-` filename
 prefix; deleting a note does **not** renumber. Deleting a session cascades to its notes and blobs but
@@ -220,13 +222,25 @@ and `unhandledrejection` listeners, and `postMessage`s each event. The content s
 80-event buffer and attaches at most 12 events from the last 3 minutes (or since the previous note) to
 each capture. **Lives in:** `public/injected.js` + the `recentEvents` block in `src/content/index.ts`.
 
+### Walkthrough report shape (what the reading agent actually gets)
+`report.md` opens with the folder's **absolute path** (asked once, kv `projectPath` — FSA won't tell
+us), then the **contact sheets**, then a timeline that inlines a still only inside a spoken window
+(2s before → 2.5s after a line, cap 16; marks and frame 1 always; a spread of 12 when nobody talked)
+and collapses every other frame to one line per run naming its sheet. Spoken lines render as ranges
+(`0:23–0:31`) and name the frames they cover. The report says whether a human confirmed the
+transcript. Console lines are scoped to the recorded tab's origin, with the drop count stated. All of
+it is the first agent's feedback on a real bundle — see decisions.md 2026-07-26. **Lives in:**
+`src/lib/markdown.ts`.
+
 ### Video walkthrough (live distillation + post-stop Whisper)
 The panel records via `getDisplayMedia` + MediaRecorder while a 500ms sampler dedups live: 64×64
 RGB signatures, keep iff >8 cells changed (channel delta >25) vs the last 4 *kept* frames — an
 absolute count so action confined to one screen region still registers (crv's 16×16/8% went blind
 there; see decisions.md 2026-07-26) — no forced keyframes, uniform thinning past 150. Dictation
-stamps lines where the sentence started; content scripts forward page events while the
-`recordingActive` flag is set. On stop the session saves immediately with the Web Speech lines,
+stamps lines where the sentence started; content scripts forward page events *and pointer samples*
+while the `recordingActive` flag is set, each tagged with its origin so the recorder can keep only
+the recorded tab's (frames carry the pointer, crosshair drawn when the capture can be mapped).
+`Alt+Shift+M` forces a keyframe through dedup (`reason: 'mark'`). On stop the session saves immediately with the Web Speech lines,
 then `transcribe.ts` decodes the webm's mic audio and `transcribeWorker.ts` runs whisper-small.en
 (q8) on-device; success sends `recording:transcript`, which swaps the lines and flips
 `written:false` so the folder rewrites. Output: report.md timeline + transcript.txt +
@@ -256,8 +270,10 @@ written. A `flushing` ref guards against re-entry. **Lives in:** `src/sidepanel/
 5. Teach `targetLine()` in `src/lib/markdown.ts` how to describe it.
 
 ### Changing what the agent reads
-All of it is `src/lib/markdown.ts` — `PREAMBLE`, `buildReport`, `agentPrompt`. Nothing else formats
-report text.
+All of it is `src/lib/markdown.ts` — `PREAMBLE`, `buildReport`, `agentPrompt` for notes;
+`RECORDING_PREAMBLE`, `inlineFrames`, `spokenWindows`, `buildRecordingReport` for walkthroughs.
+Nothing else formats report text. Every builder takes an optional `folder` (the absolute path line);
+callers get it from `sessionFolder(session, root, dir)`.
 
 ### Adding a setting
 1. Add the field + default to `Settings` / `DEFAULT_SETTINGS` in `src/lib/types.ts`.
@@ -296,6 +312,11 @@ report text.
 - **`public/injected.js` is plain JS, shipped verbatim** — no TypeScript, no imports, and it must stay
   paranoid (every hook is try/caught) because it runs inside someone else's app.
 - **Blobs, not data URLs, in IndexedDB.** Data URLs are ~33% larger and balloon a long session.
+- **The absolute project path can only come from the user.** The File System Access API never exposes
+  it; don't try to derive one from the directory handle. Unset is a supported state — the report
+  falls back to the project-relative path.
+- **The report must never look like full coverage when it isn't.** Anything that caps or thins what
+  the agent sees (inlined stills, dropped cross-origin events) prints its own count.
 
 ## Status
 
@@ -308,4 +329,8 @@ report text.
 - **Not built** — automated tests, linting, CI, packaging for the Web Store, full-page (scrolling)
   screenshots, i18n beyond the `settings.lang` passthrough, a settings surface for `autoSendMs`
   (the value is in `Settings` but has no UI).
+- **Reshaped 2026-07-26 (0.4.0)** — the first AI agent to read a real walkthrough bundle sent ranked
+  feedback; all seven points are acted on (report leads with contact sheets, rationed stills, speech
+  windows, transcript-review flag + `Alt+Shift+M` marks, origin-scoped telemetry, pointer on every
+  frame, debug-HUD guidance). Working doc: `plans/2026-07-26-agent-feedback.md`.
 - **Next** — nothing scheduled; the extension is feature-complete for its own author's use.

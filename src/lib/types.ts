@@ -72,9 +72,41 @@ export interface NoteDraft {
 }
 
 export interface TranscriptSegment {
-  /** ms from recording start */
+  /** ms from recording start — where the speaker *started* the line */
   t: number;
+  /** Spoken length in ms when the transcriber reported one. A line covers a window, not an instant. */
+  d?: number;
   text: string;
+}
+
+/** Where the mouse was, sampled by the recorded tab while a walkthrough runs. All lengths are CSS px. */
+export interface PointerSample {
+  /** Absolute ms — the panel converts it to recording-relative. */
+  ts: number;
+  /** Viewport coordinates. */
+  x: number;
+  y: number;
+  /** Screen coordinates (`MouseEvent.screenX/Y`). */
+  sx: number;
+  sy: number;
+  /** Viewport size, for the tab-capture mapping. */
+  vw: number;
+  vh: number;
+  /** Screen size, for the full-screen mapping. */
+  sw: number;
+  sh: number;
+  selector?: string;
+  text?: string;
+}
+
+/** The pointer as it applies to one keyframe. */
+export interface FramePointer {
+  /** Position inside the frame, 0–1. Absent when the capture couldn't be mapped (window capture, second monitor). */
+  nx?: number;
+  ny?: number;
+  /** What the cursor was over, in the recorded tab. */
+  selector?: string;
+  text?: string;
 }
 
 export interface RecordingFrame {
@@ -83,10 +115,12 @@ export interface RecordingFrame {
   t: number;
   /** Path relative to the session folder, e.g. frames/03-0125.jpg */
   file: string;
-  /** Why this frame survived dedup. */
-  reason: 'start' | 'change';
+  /** Why this frame exists: first frame, dedup said "new", or the human hit the mark hotkey. */
+  reason: 'start' | 'change' | 'mark';
   /** Changed-cell count (of 64×64) vs the closest of the last kept frames (absent on the first). */
   dist?: number;
+  /** Mouse at capture time, when the recorded tab was reporting it. */
+  pointer?: FramePointer;
 }
 
 export interface RecordingMeta {
@@ -100,8 +134,14 @@ export interface RecordingMeta {
   transcriber?: 'whisper';
   /** Bumped on every content mutation; recording:written only sticks when its rev still matches. */
   rev?: number;
+  /** True once a human read the transcript back and said it was right. Reset when Whisper replaces it. */
+  reviewed?: boolean;
   /** Console/network events forwarded by content scripts while recording. ts is absolute. */
   events: PageEvent[];
+  /** Origin the events are scoped to — the tab that was in front at Record. Absent = no scope (kept everything). */
+  eventScope?: string;
+  /** Events from other origins that were thrown away; reported rather than hidden. */
+  droppedEvents?: number;
   videoFile: string;
   /** True once the folder exists in the connected project dir. */
   written: boolean;
@@ -151,3 +191,8 @@ export const SEND_PHRASES =
   /\s*(?:and\s+)?(?:that'?s it|save it|save that|send it|log it|ship it|next note|end note|next)\s*[.!?]?\s*$/i;
 
 export const ACCENT = '#ff5c39';
+
+/** Contact sheet shape. The sheet builder and the report that cites the sheets must agree. */
+export const GRID_COLS = 3;
+export const GRID_ROWS = 3;
+export const GRID_PER_SHEET = GRID_COLS * GRID_ROWS;
