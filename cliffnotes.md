@@ -11,8 +11,8 @@ commits itself on silence, and the whole session is written straight into your r
 System Access API. The unusual part: `report.md` is authored **for a model, not a human**, and each
 note carries the console/network errors that fired at that exact moment.
 
-Repo directory is `chrome-bug-recorder`; the product is named **Gripe**. Legacy names survive in a
-few identifiers on purpose (see Gotchas).
+Repo directory is `gripe`, matching the product name. Legacy `chrome-bug-recorder` names survive in
+a few identifiers on purpose (see Gotchas).
 
 ## Quick Reference
 

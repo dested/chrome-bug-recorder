@@ -2,6 +2,16 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-26 — rename the repo folder to gripe without losing Claude Code history
+Asked: rename the folder to `gripe`, keep every Claude Code session, and make it repeatable for the
+next 5-6 renames. Found: Claude Code keys everything to the project's absolute path — the
+`projects/<mangled-cwd>` history dir, `cwd`/`realParentDir` inside 4127 places in the transcripts,
+the `projects` map + `githubRepoPaths` in `.claude.json`, `history.jsonl`, and the session/teams
+registries. Done: built `reproject` (github.com/dested/reproject, also installed as a skill) which
+moves the folder and re-points all of it; the folder move itself must run with no Claude session
+live in the folder. Repo was already named gripe everywhere but this line.
+Touched: cliffnotes.md, updates.md.
+
 ## 2026-07-26 — 0.3.0: dedup that sees canvases + on-device Whisper
 Asked: real recording kept 1 keyframe of 111 sampled and the Web Speech transcript was way off;
 run the webm through the original crv tool; use "real tools" for perfect output. Found: the
