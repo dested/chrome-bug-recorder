@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CaptureMode, Note, PageEvent, PointerSample, Session, Settings } from '../lib/types';
+import type { CaptureMode, Note, PageEvent, PointerSample, Project, Session, Settings } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import { send } from '../lib/messages';
 import { blobs } from '../lib/db';
 import {
   REPORT_DIR,
   checkPermission,
+  clearLegacyProject,
   displayPath,
-  forgetProjectDir,
+  dropHandle,
   fsaSupported,
-  loadProjectDir,
-  loadProjectPath,
+  loadHandles,
+  loadLegacyProject,
   pickProjectDir,
   requestPermission,
-  saveProjectPath,
+  saveHandle,
   sessionFolder,
   writeRecordingSession,
   writeSession,
   type DirPermission,
   type NoteImages,
+  type ProjectHandles,
 } from '../lib/fs';
 import {
   agentPrompt,
@@ -30,7 +32,7 @@ import {
   buildTranscriptTxt,
 } from '../lib/markdown';
 import { blobBytes, makeZip, textBytes } from '../lib/zip';
-import { clockTime, dateTime, mmss, originOf, shortUrl } from '../lib/format';
+import { cleanPath, clockTime, dateTime, mmss, originOf, shortUrl } from '../lib/format';
 import { Recorder, type RecorderUpdate } from './recorder';
 import { makeGrids, type GridFrame } from './grids';
 import { transcribeRecording, type TranscribeProgress } from './transcribe';
@@ -40,18 +42,33 @@ interface PanelState {
   activeSessionId: string | null;
   notes: Note[];
   settings: Settings;
+  projects: Project[];
+  activeProjectId: string | null;
 }
 
-const EMPTY: PanelState = { sessions: [], activeSessionId: null, notes: [], settings: DEFAULT_SETTINGS };
+const EMPTY: PanelState = {
+  sessions: [],
+  activeSessionId: null,
+  notes: [],
+  settings: DEFAULT_SETTINGS,
+  projects: [],
+  activeProjectId: null,
+};
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 export default function App() {
   const [state, setState] = useState<PanelState>(EMPTY);
-  const [dir, setDir] = useState<FileSystemDirectoryHandle | null>(null);
-  const [perm, setPerm] = useState<DirPermission>('prompt');
-  // What the user says the connected folder is on disk — FSA won't tell us, and the
+  // Handles can't ride a chrome message, so the panel keeps them itself, keyed by
+  // the project id the worker minted.
+  const [handles, setHandles] = useState<ProjectHandles>({});
+  const [perms, setPerms] = useState<Record<string, DirPermission>>({});
+  const [showProjects, setShowProjects] = useState(false);
+  // Project id whose absolute path we're asking for — FSA won't tell us, and the
   // agent reading the report has to be able to find it.
-  const [root, setRoot] = useState('');
-  const [askRoot, setAskRoot] = useState(false);
+  const [askPath, setAskPath] = useState<string | null>(null);
+  const [showAllSessions, setShowAllSessions] = useState(false);
+  const migrated = useRef(false);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -81,7 +98,9 @@ export default function App() {
   );
 
   const refresh = useCallback(async () => {
-    setState(await send<PanelState>({ type: 'state:get' }));
+    const next = await send<PanelState>({ type: 'state:get' });
+    setState(next);
+    return next;
   }, []);
 
   useEffect(() => {
@@ -120,40 +139,76 @@ export default function App() {
     });
   }, []);
 
-  // ── project folder ────────────────────────────────────────────────────
+  // ── projects ──────────────────────────────────────────────────────────
+  /**
+   * A session writes into the folder it was started in, forever — switching the
+   * connected project must never redirect a bundle that's already half on disk.
+   * Sessions from before projects existed have no id and follow the active one.
+   */
+  const projectFor = useCallback(
+    (target: Session | null | undefined): Project | null => {
+      const id = target?.projectId ?? state.activeProjectId;
+      return state.projects.find((p) => p.id === id) ?? null;
+    },
+    [state.projects, state.activeProjectId],
+  );
+
+  const activeProject = useMemo(
+    () => state.projects.find((p) => p.id === state.activeProjectId) ?? null,
+    [state.projects, state.activeProjectId],
+  );
+  const sessionProject = projectFor(session);
+  const dir = sessionProject ? (handles[sessionProject.id] ?? null) : null;
+  const perm: DirPermission = sessionProject ? (perms[sessionProject.id] ?? 'prompt') : 'prompt';
+
   useEffect(() => {
-    void (async () => {
-      const stored = await loadProjectPath();
-      setRoot(stored);
-      const handle = await loadProjectDir();
-      if (!handle) return;
-      setDir(handle);
-      setPerm(await checkPermission(handle));
-      if (!stored) setAskRoot(true); // asked once, then never again
-    })();
+    void (async () => setHandles(await loadHandles()))();
   }, []);
 
-  const commitRoot = async (value: string) => {
-    const clean = await saveProjectPath(value);
-    setRoot(clean);
-    setAskRoot(false);
-    // The report opens with this path, so what's on disk is now stale.
-    if (clean && session) {
-      await send({ type: 'session:rewrite', id: session.id });
+  useEffect(() => {
+    void (async () => {
+      const next: Record<string, DirPermission> = {};
+      for (const [id, handle] of Object.entries(handles)) next[id] = await checkPermission(handle);
+      setPerms(next);
+    })();
+  }, [handles]);
+
+  /** The 0.4 single folder becomes project #1, and every session already recorded belongs to it. */
+  useEffect(() => {
+    if (migrated.current) return;
+    migrated.current = true;
+    void (async () => {
+      const legacy = await loadLegacyProject();
+      if (!legacy) return;
+      // The panel-in-a-tab shares this database and may have done it already.
+      const current = await send<PanelState>({ type: 'state:get' });
+      if (!current.projects.length) {
+        const project = await send<Project>({
+          type: 'project:add',
+          name: legacy.handle.name,
+          path: legacy.path,
+          adopt: true,
+        });
+        setHandles(await saveHandle(project.id, legacy.handle));
+      }
+      await clearLegacyProject();
       await refresh();
-    }
-  };
+    })();
+  }, [refresh]);
 
   const [pickerBlocked, setPickerBlocked] = useState(false);
 
-  const connect = async () => {
+  const addProject = async () => {
     try {
       const handle = await pickProjectDir();
       if (!handle) return;
-      setDir(handle);
-      setPerm(await checkPermission(handle));
-      setFlash(`connected to ${handle.name}`);
-      if (!root) setAskRoot(true); // the one moment they know the path by heart
+      const project = await send<Project>({ type: 'project:add', name: handle.name });
+      setHandles(await saveHandle(project.id, handle));
+      setPerms((prev) => ({ ...prev, [project.id]: 'granted' }));
+      setShowProjects(false);
+      setAskPath(project.id); // the one moment they know the path by heart
+      await refresh();
+      say(`connected to ${handle.name}`);
     } catch (error) {
       // Some Chrome builds refuse the picker inside the side panel; the same
       // page in a tab shares this IndexedDB, so picking there works fine.
@@ -162,28 +217,58 @@ export default function App() {
     }
   };
 
+  /** Re-attach a folder to a project that lost its handle, keeping every session pointed at it. */
+  const repickProject = async (id: string) => {
+    const handle = await pickProjectDir();
+    if (!handle) return;
+    setHandles(await saveHandle(id, handle));
+    setPerms((prev) => ({ ...prev, [id]: 'granted' }));
+    say(`reconnected ${handle.name}`);
+  };
+
+  const switchProject = async (id: string) => {
+    await send({ type: 'project:activate', id });
+    setShowProjects(false);
+    const next = await refresh();
+    say(next.projects.find((p) => p.id === id)?.name ?? 'switched');
+  };
+
+  const commitPath = async (id: string, value: string) => {
+    setAskPath(null);
+    const clean = cleanPath(value);
+    const project = state.projects.find((p) => p.id === id);
+    if (clean === (project?.path ?? '')) return;
+    await send({ type: 'project:path', id, path: clean });
+    // The report opens with this path, so what's on disk is now stale.
+    if (clean && session && sessionProject?.id === id) {
+      await send({ type: 'session:rewrite', id: session.id });
+    }
+    await refresh();
+  };
+
   const openInTab = () => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
 
   const reconnect = async () => {
-    if (!dir) return;
-    setPerm(await requestPermission(dir));
+    if (!dir || !sessionProject) return;
+    const next = await requestPermission(dir);
+    setPerms((prev) => ({ ...prev, [sessionProject.id]: next }));
   };
 
-  const disconnect = async () => {
-    await forgetProjectDir();
-    setDir(null);
-    setPerm('prompt');
+  const forgetProject = async (id: string) => {
+    await send({ type: 'project:forget', id });
+    setHandles(await dropHandle(id));
+    await refresh();
   };
 
   // ── write-through to disk ─────────────────────────────────────────────
-  useEffect(() => {
-    if (!dir || perm !== 'granted' || !session || !state.notes.length) return;
-    if (flushing.current) return;
-    const pending = state.notes.filter((n) => !n.written);
-    if (!pending.length) return;
-
-    flushing.current = true;
-    void (async () => {
+  /** Writes one session's folder. Silent when its project isn't connected — the notes stay pending. */
+  const flushNotes = useCallback(
+    async (target: Session, notes: Note[]) => {
+      const project = projectFor(target);
+      const handle = project ? handles[project.id] : null;
+      if (!project || !handle || perms[project.id] !== 'granted') return;
+      const pending = notes.filter((n) => !n.written);
+      if (!pending.length) return;
       try {
         const images = new Map<string, NoteImages>();
         for (const note of pending) {
@@ -192,53 +277,71 @@ export default function App() {
             crop: note.cropFile ? await blobs.get(`${note.id}:crop`) : undefined,
           });
         }
-        await writeSession(dir, session, state.notes, images, sessionFolder(session, root, dir));
+        await writeSession(handle, target, notes, images, sessionFolder(target, project));
         await send({ type: 'note:written', ids: pending.map((n) => n.id) });
         await refresh();
       } catch (error) {
         setFlash(`write failed: ${String(error).slice(0, 60)}`);
-        setPerm(await checkPermission(dir));
-      } finally {
-        flushing.current = false;
+        // A revoked handle is the usual cause — but not the only one, so ask.
+        const granted = await checkPermission(handle);
+        setPerms((prev) => ({ ...prev, [project.id]: granted }));
       }
-    })();
-  }, [dir, perm, root, session, state.notes, refresh]);
+    },
+    [projectFor, handles, perms, refresh],
+  );
 
-  useEffect(() => {
-    if (!dir || perm !== 'granted' || !session?.recording || session.recording.written) return;
-    if (flushingRec.current) return;
-
-    flushingRec.current = true;
-    void (async () => {
+  const flushRecording = useCallback(
+    async (target: Session) => {
+      const rec = target.recording;
+      const project = projectFor(target);
+      const handle = project ? handles[project.id] : null;
+      if (!rec || !project || !handle || perms[project.id] !== 'granted') return;
       try {
-        const rec = session.recording!;
         const frames = new Map<number, Blob>();
         for (const f of rec.frames) {
-          const blob = await blobs.get(`${session.id}:frame:${f.index}`);
+          const blob = await blobs.get(`${target.id}:frame:${f.index}`);
           if (blob) frames.set(f.index, blob);
         }
-        const video = await blobs.get(`${session.id}:video`);
+        const video = await blobs.get(`${target.id}:video`);
         const gridFrames = rec.frames
           .map((f) => ({ blob: frames.get(f.index), label: f.file.split('/').pop()! }))
           .filter((g): g is GridFrame => Boolean(g.blob));
         await writeRecordingSession(
-          dir,
-          session,
+          handle,
+          target,
           frames,
           video,
           await makeGrids(gridFrames),
-          sessionFolder(session, root, dir),
+          sessionFolder(target, project),
         );
-        await send({ type: 'recording:written', id: session.id, rev: rec.rev ?? 0 });
+        await send({ type: 'recording:written', id: target.id, rev: rec.rev ?? 0 });
         await refresh();
       } catch (error) {
         setFlash(`write failed: ${String(error).slice(0, 60)}`);
-        setPerm(await checkPermission(dir));
-      } finally {
-        flushingRec.current = false;
+        // A revoked handle is the usual cause — but not the only one, so ask.
+        const granted = await checkPermission(handle);
+        setPerms((prev) => ({ ...prev, [project.id]: granted }));
       }
-    })();
-  }, [dir, perm, root, session, refresh]);
+    },
+    [projectFor, handles, perms, refresh],
+  );
+
+  useEffect(() => {
+    if (!session || flushing.current) return;
+    if (!state.notes.some((n) => !n.written)) return;
+    flushing.current = true;
+    void flushNotes(session, state.notes).finally(() => {
+      flushing.current = false;
+    });
+  }, [session, state.notes, flushNotes]);
+
+  useEffect(() => {
+    if (!session?.recording || session.recording.written || flushingRec.current) return;
+    flushingRec.current = true;
+    void flushRecording(session).finally(() => {
+      flushingRec.current = false;
+    });
+  }, [session, flushRecording]);
 
   // ── thumbnails ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -302,8 +405,8 @@ export default function App() {
 
   /**
    * Runs after the session is already saved, never before: on success it swaps in
-   * the Whisper lines and flips `written` back to false so the flush effect
-   * rewrites the folder. Fail or close the panel and the Web Speech lines stand.
+   * the Whisper lines and flips `written` back to false so the folder is rewritten.
+   * Fail or close the panel and the Web Speech lines stand.
    */
   const runWhisper = async (id: string) => {
     if (whispering.current) return;
@@ -314,7 +417,18 @@ export default function App() {
       const segments = await transcribeRecording(video, setWhisper);
       if (segments?.length) {
         await send({ type: 'recording:transcript', id, transcript: segments });
-        await refresh();
+        const next = await refresh();
+        // This lands minutes later — the gripe may already be closed, and the
+        // flush effect only ever looks at the active session. Write it by id.
+        const target = next.sessions.find((s) => s.id === id);
+        if (target?.recording && !target.recording.written && !flushingRec.current) {
+          flushingRec.current = true;
+          try {
+            await flushRecording(target);
+          } finally {
+            flushingRec.current = false;
+          }
+        }
       }
     } finally {
       whispering.current = null;
@@ -427,8 +541,46 @@ export default function App() {
 
   const copyPrompt = async () => {
     if (!session) return;
-    await navigator.clipboard.writeText(agentPrompt(session, sessionFolder(session, root, dir)));
-    say(root ? 'prompt copied — paste into Claude Code' : 'prompt copied — set the folder path for a clean handoff');
+    await navigator.clipboard.writeText(agentPrompt(session, sessionFolder(session, sessionProject)));
+    say(
+      sessionProject?.path
+        ? 'prompt copied — paste into Claude Code'
+        : 'prompt copied — set the folder path for a clean handoff',
+    );
+  };
+
+  /**
+   * Closing a gripe: get every byte on disk, hand over the prompt, then let go of
+   * the session. The next capture opens a fresh one in whatever project is
+   * connected then — usually a different repo, which is the whole point.
+   *
+   * The clipboard write goes first: it needs the click's user activation, and the
+   * flush below can burn through it.
+   */
+  const finish = async () => {
+    if (!session) return;
+    const target = session;
+    await navigator.clipboard
+      .writeText(agentPrompt(target, sessionFolder(target, sessionProject)))
+      .catch(() => {});
+    // After the close there is no active session, and the flush effects only ever
+    // run for the active one — so anything still pending has to land right here.
+    for (let i = 0; i < 60 && (flushing.current || flushingRec.current); i++) await wait(50);
+    flushing.current = true;
+    flushingRec.current = true;
+    try {
+      await flushNotes(target, state.notes);
+      if (target.recording && !target.recording.written) await flushRecording(target);
+    } finally {
+      flushing.current = false;
+      flushingRec.current = false;
+    }
+    await send({ type: 'session:close', id: target.id });
+    await refresh();
+    // The next gripe is usually a different repo — put the switcher in front of
+    // them rather than letting it land in the folder they just finished with.
+    if (state.projects.length > 1) setShowProjects(true);
+    say(dir && perm === 'granted' ? 'gripe closed — prompt copied' : 'gripe closed — nothing written to disk');
   };
 
   const exportZip = async () => {
@@ -487,6 +639,13 @@ export default function App() {
   const written = state.notes.filter((n) => n.written).length;
   const rec = session?.kind === 'recording' ? (session.recording ?? null) : null;
   const hasContent = state.notes.length > 0 || Boolean(session?.recording);
+  // The switcher is scoped to the project you're in; the rest are one row away.
+  const inProject = (s: Session) => (s.projectId ?? state.activeProjectId ?? null) === state.activeProjectId;
+  const mine = state.sessions.filter(inProject);
+  const elsewhere = state.sessions.filter((s) => !inProject(s));
+  const listed = showAllSessions ? [...mine, ...elsewhere] : mine;
+  const projectName = (id?: string) => state.projects.find((p) => p.id === id)?.name ?? 'no folder';
+  const dotClass = (id: string) => (perms[id] === 'granted' ? 'ok' : handles[id] ? 'warn' : '');
 
   return (
     <div className="app">
@@ -529,24 +688,34 @@ export default function App() {
             {state.sessions.length > 1 ? `${state.sessions.length} ▾` : '▾'}
           </button>
         </div>
-        <div className="sub">{session ? `${REPORT_DIR}/${session.slug}` : 'starts on your first note'}</div>
+        <div className="sub">
+          {session
+            ? `${REPORT_DIR}/${session.slug}`
+            : activeProject
+              ? `starts on your first note · ${activeProject.name}`
+              : 'starts on your first note'}
+        </div>
       </div>
 
       {showSessions && (
         <div className="sessions">
-          {!state.sessions.length && <div className="srow-empty">no sessions yet</div>}
-          {state.sessions.map((s) => (
+          {!listed.length && <div className="srow-empty">no gripes in this project yet</div>}
+          {listed.map((s) => (
             <div
               key={s.id}
-              className={`srow ${s.id === state.activeSessionId ? 'on' : ''}`}
+              className={`srow ${s.id === state.activeSessionId ? 'on' : ''} ${s.closed ? 'closed' : ''}`}
               onClick={() => void switchSession(s.id)}
             >
-              <div className="sname">{s.name}</div>
+              <div className="sname">
+                {s.name}
+                {s.closed && <span className="stag">closed</span>}
+              </div>
               <div className="smeta">
                 {s.kind === 'recording'
                   ? `${s.recording?.frames.length ?? 0} frames`
                   : `${s.noteCount} note${s.noteCount === 1 ? '' : 's'}`}{' '}
                 · {dateTime(s.createdAt)}
+                {!inProject(s) && ` · ${projectName(s.projectId)}`}
               </div>
               <button
                 className="kill"
@@ -561,57 +730,108 @@ export default function App() {
               </button>
             </div>
           ))}
+          {elsewhere.length > 0 && (
+            <button className="srow-more" onClick={() => setShowAllSessions((v) => !v)}>
+              {showAllSessions
+                ? 'hide other projects'
+                : `${elsewhere.length} in other project${elsewhere.length === 1 ? '' : 's'}`}
+            </button>
+          )}
         </div>
       )}
 
       <div className="folder">
-        <span className={`status ${folderReady ? 'ok' : dir ? 'warn' : ''}`} />
+        <span className={`status ${folderReady ? 'ok' : sessionProject ? 'warn' : ''}`} />
         <span className="path">
           {!fsaSupported()
             ? 'folder writing unavailable — use Export .zip'
-            : dir
-              ? displayPath(dir, session, root)
+            : sessionProject
+              ? displayPath(sessionProject, session)
               : 'no project folder connected'}
         </span>
-        {dir && (
+        {sessionProject && (
           <button
             className="link"
-            onClick={() => setAskRoot((v) => !v)}
+            onClick={() => setAskPath((v) => (v === sessionProject.id ? null : sessionProject.id))}
             title="The absolute path to this folder — your agent needs it to find the report"
           >
-            {root ? 'path' : 'path?'}
+            {sessionProject.path ? 'path' : 'path?'}
           </button>
         )}
-        {!dir && fsaSupported() && !pickerBlocked && (
-          <button className="link" onClick={connect}>
-            Connect folder
-          </button>
-        )}
-        {!dir && pickerBlocked && (
-          <button className="link" onClick={openInTab}>
-            Open in tab →
-          </button>
-        )}
-        {dir && perm !== 'granted' && (
+        {sessionProject && dir && perm !== 'granted' && (
           <button className="link" onClick={reconnect}>
             Reconnect
           </button>
         )}
-        {dir && (
-          <button className="link" onClick={disconnect} title="Forget this folder">
-            ✕
+        {sessionProject && !dir && (
+          <button
+            className="link"
+            onClick={() => void repickProject(sessionProject.id)}
+            title="This project's folder handle is missing — point at it again"
+          >
+            Repick
+          </button>
+        )}
+        {fsaSupported() && !state.projects.length && !pickerBlocked && (
+          <button className="link" onClick={addProject}>
+            Connect folder
+          </button>
+        )}
+        {!state.projects.length && pickerBlocked && (
+          <button className="link" onClick={openInTab}>
+            Open in tab →
+          </button>
+        )}
+        {state.projects.length > 0 && (
+          <button
+            className={`chev ${showProjects ? 'open' : ''}`}
+            title="Switch project"
+            onClick={() => setShowProjects((v) => !v)}
+          >
+            {state.projects.length > 1 ? `${state.projects.length} ▾` : '▾'}
           </button>
         )}
       </div>
 
-      {dir && askRoot && (
+      {showProjects && (
+        <div className="projects">
+          {state.projects.map((p) => (
+            <div
+              key={p.id}
+              className={`prow ${p.id === state.activeProjectId ? 'on' : ''}`}
+              onClick={() => void switchProject(p.id)}
+            >
+              <span className={`status ${dotClass(p.id)}`} />
+              <div className="pbody">
+                <div className="pname">{p.name}</div>
+                <div className="ppath">{p.path || (handles[p.id] ? 'path not set' : 'folder not held here')}</div>
+              </div>
+              <button
+                className="kill"
+                title="Forget this folder (files on disk are kept)"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await forgetProject(p.id);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button className="padd" onClick={pickerBlocked ? openInTab : addProject}>
+            {pickerBlocked ? 'picker blocked here — open in tab →' : '+ connect another folder'}
+          </button>
+        </div>
+      )}
+
+      {askPath && (
         <div className="rootpath">
           <input
             autoFocus
-            defaultValue={root}
+            defaultValue={state.projects.find((p) => p.id === askPath)?.path ?? ''}
             spellCheck={false}
-            placeholder={`absolute path to ${dir.name}`}
-            onBlur={(e) => void commitRoot(e.target.value)}
+            placeholder={`absolute path to ${projectName(askPath)}`}
+            onBlur={(e) => void commitPath(askPath, e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
           />
           <div className="why">
@@ -892,14 +1112,11 @@ export default function App() {
         </button>
         <button
           className="ghost"
-          title="Start a new session"
-          onClick={async () => {
-            await send({ type: 'session:new' });
-            await refresh();
-            say('new session started');
-          }}
+          disabled={!hasContent}
+          title="Write it out, copy the prompt, and close this gripe — the next one starts fresh"
+          onClick={() => void finish()}
         >
-          +
+          done
         </button>
       </div>
 

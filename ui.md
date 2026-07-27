@@ -2,7 +2,7 @@
 
 > The source of truth for how Gripe **looks and feels**. Follow it for anything visual.
 > Keep it current as part of the definition of done for any UI change.
-> Last updated: 2026-07-26.
+> Last updated: 2026-07-26 (0.5.0).
 
 ## North star
 
@@ -106,11 +106,12 @@ text), 11.5px (mode buttons), 10.5px (metadata, wordmark), 9.5–10px (badges, t
 ```
 header      wordmark + note count
 session     name input + session switcher chevron ▾   (+ expandable session list)
-folder      status dot + path + Connect/Reconnect/✕
+folder      status dot + path + path?/Reconnect + project switcher ▾
+            (+ expandable project list, + the absolute-path input)
 controls    armed CTA + Region/Draw/Page + shortcut hint line
 notes       flex:1, scrolls; note rows, expandable full screenshot
 toggles     pill row: auto-mic, auto-send, spotlight, stay armed
-footer      Copy prompt (primary) + .zip + New session
+footer      Copy prompt (primary) + .zip + done
 ```
 
 **Overlay** — absolutely positioned children of one fixed `.layer` inside the shadow root:
@@ -128,6 +129,8 @@ for region/draw, composer bar bottom-center at `min(680px, 100vw - 40px)`, toast
 | `.bar` (composer) | `content/ui.ts` | Mic + textarea + interim line + meta row + countdown |
 | `.toast` | `content/ui.ts` | "Note N saved" + filename, 2.4s |
 | `.note` row | `sidepanel/App.tsx` + `styles.css` | Thumbnail, index badge, text, meta, error count, hover ✕ |
+| `.srow` / `.prow` | `sidepanel/App.tsx` | Session and project rows: same anatomy — accent left rail when active, mono sub-line, hover-only `×`. A `.srow.closed` mutes its name and carries a `closed` tag |
+| `.projects` + `.padd` | `sidepanel/App.tsx` | The connected-folder list under the folder strip; `.padd` is its full-width "+ connect another folder" row |
 | `.toggle` pill | `sidepanel/App.tsx` | Settings switch: dot + label, accent-soft when on |
 | `.flash` | `sidepanel/App.tsx` | Inverted transient toast, 1.7s, rises 8px |
 
@@ -171,7 +174,11 @@ Keyboard hints are always a `<kbd>`: mono, 10–10.5px, translucent fill, hairli
   (`#ffb9a5`) with plain lowercase text: `capture failed: …`, `microphone blocked on this site — type
   instead`. In the panel it's the `.flash` pill.
 - **Connection status** — one 6px dot: `--faint` (nothing connected), `--accent` (connected, needs
-  permission), `#58c98a` (writing).
+  permission), `#58c98a` (writing). It appears twice: on the folder strip, where it reflects the
+  *current session's* project, and on every row of the project list.
+- **Finished** — closing a gripe empties the panel back to its empty state; that blankness is the
+  confirmation, plus one `.flash` (`gripe closed — prompt copied`). Nothing turns green, nothing is
+  ticked.
 - **Destructive** — a `✕` that only appears on row hover, and a tooltip that says what survives
   ("Forget this session (files on disk are kept)"). No confirmation dialogs — modals freeze capture.
 
@@ -186,8 +193,8 @@ Good: `Click what's wrong` · `Drag a box around it` · `no project folder conne
 Bad: `Please select an element to continue.` · `Error: Operation failed` · `Successfully saved!` ·
 `Settings` as a heading · anything with an exclamation mark.
 
-Buttons are verbs or nouns, never sentences: `Connect folder`, `Reconnect`, `.zip`, `+`,
-`Copy prompt for Claude Code`. Toggle labels are hyphenated lowercase: `auto-mic`, `auto-send`,
+Buttons are verbs or nouns, never sentences: `Connect folder`, `Reconnect`, `.zip`, `done`,
+`Copy prompt for Claude Code`, `+ connect another folder`. Toggle labels are hyphenated lowercase: `auto-mic`, `auto-send`,
 `spotlight`, `stay armed`.
 
 ## Don'ts

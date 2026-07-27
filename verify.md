@@ -106,9 +106,10 @@ Touchpoints: `src/background/index.ts` (session handlers), the session UI in `sr
 
 1. Rename the session → the `gripes/<slug>` sub-line keeps the *original* slug (slugs are frozen at
    creation; renaming must not move an existing folder).
-2. `+` → new session, note count resets, toolbar badge clears.
-3. `▾` → switch back to the old session → its notes reappear; record one more → it appends and
-   `report.md` is rewritten with all of them.
+2. **done** → the bundle is on disk, the prompt is on the clipboard, the panel is empty and the
+   toolbar badge is clear. Record a note → a *new* session appears; the closed one didn't catch it.
+3. `▾` → the closed session is listed, muted, tagged `closed`; click it → it reopens with its notes;
+   record one more → it appends and `report.md` is rewritten with all of them.
 4. `×` on a session row → it vanishes from the list and the folder on disk is still there.
 
 ### 7. Export and handoff [cheap]
@@ -144,3 +145,29 @@ Touchpoints: `src/content/index.ts` boot, `arm()` in `src/background/index.ts`
    and it still arms.
 4. `Esc` mid-compose → overlay fully disappears: no crosshair cursor left on the page, no leftover
    highlight, host page clicks work again.
+
+### 10. Two projects, two folders [medium]
+Touchpoints: the `project:*` handlers in `src/background/index.ts`, the folder strip in
+`src/sidepanel/App.tsx`, `features/project-folder-sync.md`
+
+1. With one folder connected, `▾` on the folder strip → **+ connect another folder** → pick a second
+   scratch dir → it becomes active, the path input asks for *its* absolute path.
+2. Record a note → it lands in the **second** folder; the first is untouched.
+3. `▾` → click the first project → the strip's path switches, and the switcher's session list now
+   shows that project's gripes (the other one is behind the "N in other projects" row).
+4. Reopen a session from project one, then switch the active project to two while it's open → record
+   nothing, just check the strip: the path still names project **one**. A session writes home.
+5. **done** on that session → files land in project one even though two is where you're headed next.
+6. `×` on a project row → it's forgotten, files on disk survive, and its sessions still list under
+   "N in other projects" with `no folder`.
+7. Restart Chrome → both projects are still listed with their paths; the dots may be orange until
+   **Reconnect**.
+
+### 11. Migrating from 0.4 [cheap, one-shot]
+Only meaningful on a profile that used 0.4. Touchpoints: the migration effect in `src/sidepanel/App.tsx`
+
+1. Load 0.5 over a profile with a connected folder → the folder appears as the one project, keeping
+   its name and absolute path, and every existing session lists inside it (not under "other
+   projects").
+2. DevTools → Application → IndexedDB → `bug-recorder` → `kv`: `projectDir` and `projectPath` are
+   gone, `projects` and `projectHandles` are present.

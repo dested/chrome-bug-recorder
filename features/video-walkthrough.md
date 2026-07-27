@@ -84,8 +84,8 @@ capture, kept 1 frame of 22 (see `decisions.md`, 2026-07-26).
   panel (`recording:reviewed`), report.md and MANIFEST.txt say the transcript was not checked and
   tell the agent to believe the frames where they disagree. A Whisper pass landing later resets the
   flag — new words nobody has read.
-- **Every report opens with the folder's absolute path**, which the panel asks for once and keeps in
-  kv (`projectPath`); the File System Access API will not tell us. Changing it marks the active
+- **Every report opens with the folder's absolute path**, which the panel asks for once per connected
+  project and keeps on `Project.path`; the File System Access API will not tell us. Changing it marks the active
   session unwritten (`session:rewrite`) so what's on disk catches up. Unset, the line falls back to
   the project-relative path plus "search for that directory name".
 - The panel's recording view shows duration/keyframes/lines/errors, a 3-col frame grid with mm:ss

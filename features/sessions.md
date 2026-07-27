@@ -8,24 +8,37 @@ A session is one recording run — a named bucket of notes that maps 1:1 to one 
 `report.md`. It exists so a click-through of the checkout flow produces one artifact to hand to an
 agent, rather than 12 loose screenshots, and so you can come back to an old run and append to it.
 
+A session belongs to one project (`projectId`) and ends by being **closed**: handed off, written out,
+done. Closing is the gesture that separates one gripe from the next, and the next one usually lives
+in a different repo — see [project folder sync](project-folder-sync.md).
+
 ## Behavior spec
 
-- When the first note of a run is saved and no session is active, one is created automatically, named
-  from the page title (falling back to the page origin).
+- When the first note of a run is saved and no session is active (or the active one is closed), one is
+  created automatically, named from the page title (falling back to the page origin) and stamped with
+  the active `projectId`.
 - A session's `slug` is `YYYY-MM-DD-HHMM-<slugified name>`, deduplicated with a `-2`, `-3` suffix
   against existing slugs. **The slug is frozen at creation** — it is the folder name.
 - When the user renames a session, the display name changes and `report.md`'s title changes on the
   next write; the folder does **not** move.
-- When the user clicks `+`, a new session is created from the active tab's title and becomes active;
-  the note list empties and the toolbar badge clears.
-- When the user clicks `▾`, the session list opens showing every session newest-first with its note
-  count and creation time; the active one is marked with an accent left rail.
+- When the user clicks **done**, the session is flushed to disk, the agent prompt is copied, the
+  session is marked `closed`, and *no* session is active afterwards — the panel goes back to its
+  empty state and the next capture opens a fresh gripe. With more than one project connected, the
+  project list opens so the next one can land somewhere else.
+- The clipboard write happens first: it needs the click's user activation, which the flush can outlast.
+- When the user clicks `▾`, the session list opens showing the **active project's** sessions
+  newest-first with note count and creation time; the active one is marked with an accent left rail,
+  closed ones are muted and tagged `closed`.
+- When sessions exist in other projects, one row at the bottom says how many; clicking it appends
+  them, each labelled with its project name.
 - When the user clicks a session in that list, it becomes active, its notes load, and the list closes.
+  A closed session is **reopened** by being activated, and activating a session from another project
+  switches the active project to match.
 - When notes are added to a reactivated session, they continue its numbering and the whole
   `report.md` is rewritten in place.
 - When the user clicks `×` on a session row, the session, its notes, and its image blobs are deleted
-  from IndexedDB; **files already on disk are kept** (the tooltip says so). The first remaining
-  session becomes active.
+  from IndexedDB; **files already on disk are kept** (the tooltip says so). The newest remaining open
+  session *in the same project* becomes active, or none.
 - The toolbar badge shows the active session's note count, or nothing at zero.
 - Note numbering comes from `session.noteCount`, which only ever increases — deleting note 2 leaves a
   gap, and files stay `01-`, `03-`.
@@ -35,17 +48,19 @@ agent, rather than 12 loose screenshots, and so you can come back to an old run 
 
 | Part | File |
 | --- | --- |
-| Create/rename/activate/delete handlers, badge | `src/background/index.ts` |
-| Session name input, `▾` switcher, `+`, `×` | `src/sidepanel/App.tsx` |
+| Create/rename/activate/close/delete handlers, badge | `src/background/index.ts` |
+| Session name input, `▾` switcher, `done`, `×` | `src/sidepanel/App.tsx` |
 | Slug and timestamp generation | `slugify`, `stamp` in `src/lib/format.ts` |
 | Persistence + cascade delete | `src/lib/db.ts` |
 | Folder naming | `sessionDir` in `src/lib/fs.ts` |
 
 ## Data
 
-`Session { id, name, slug, createdAt, updatedAt, origin, noteCount }` in the `sessions` store; the
-active session id lives at `kv.activeSessionId`. Notes reference it by `sessionId` and are read
-through the `bySession` index. `deleteSession` cascades to notes and their two blob keys.
+`Session { id, name, slug, createdAt, updatedAt, origin, noteCount, projectId?, closed? }` in the
+`sessions` store; the active session id lives at `kv.activeSessionId` (`null` right after a close).
+Notes reference it by `sessionId` and are read through the `bySession` index. `deleteSession` cascades
+to notes and their two blob keys. `projectId` is absent on sessions recorded before 0.5 unless the
+migration adopted them.
 
 ## Edge cases
 
@@ -57,7 +72,10 @@ through the `bySession` index. `deleteSession` cascades to notes and their two b
 - **A session recorded on one origin, continued on another** keeps its original `origin` field; the
   report's header uses the first note's origin instead.
 - **Notes recorded while the panel is closed** attach to whatever session was last active — including
-  one you switched to hours ago.
+  one you switched to hours ago. If that session was closed, a fresh one is created instead.
+- **Closing with nothing connected** still closes; the flash says "nothing written to disk". The
+  bundle survives in IndexedDB — export it as **.zip**, or connect a folder and reopen the session
+  from the switcher, which makes it active again and flushes it.
 
 ## Open questions
 

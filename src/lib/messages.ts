@@ -14,10 +14,18 @@ export type Request =
   | { type: 'note:add'; draft: NoteDraft }
   | { type: 'settings:get' }
   | { type: 'settings:set'; patch: Partial<Settings> }
-  | { type: 'session:new'; name?: string }
   | { type: 'session:rename'; id: string; name: string }
   | { type: 'session:activate'; id: string }
   | { type: 'session:delete'; id: string }
+  // Handed off and finished: no more notes land here, and the panel goes blank
+  // until the next capture opens a fresh one.
+  | { type: 'session:close'; id: string }
+  // Projects. The panel keeps the directory handles (they can't be messaged) and
+  // the worker keeps the metadata, so both sides stay in the usual state flow.
+  | { type: 'project:add'; name: string; path?: string; adopt?: boolean }
+  | { type: 'project:activate'; id: string }
+  | { type: 'project:path'; id: string; path: string }
+  | { type: 'project:forget'; id: string }
   // Mark everything in a session unwritten so the folder is rebuilt (the project
   // path changed, and it's printed at the top of every report).
   | { type: 'session:rewrite'; id: string }

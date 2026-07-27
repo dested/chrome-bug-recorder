@@ -155,9 +155,32 @@ export interface Session {
   updatedAt: number;
   origin: string;
   noteCount: number;
+  /** Which connected project this writes into. Absent on sessions recorded before projects existed. */
+  projectId?: string;
+  /** Handed off and finished. A closed session never receives another note; activating it reopens it. */
+  closed?: boolean;
   /** Absent means a plain note session. */
   kind?: 'recording';
   recording?: RecordingMeta;
+}
+
+/**
+ * A connected repo. One gripe belongs to one project, and the next one usually
+ * doesn't — so folders are a remembered list, not a single setting.
+ *
+ * This is metadata only. The `FileSystemDirectoryHandle` lives beside it in
+ * `kv.projectHandles` because `chrome.runtime.sendMessage` JSON-serializes and a
+ * handle can't survive that; IndexedDB structured-clones it, so the panel reads
+ * handles straight from the store and the worker never touches one.
+ */
+export interface Project {
+  id: string;
+  /** The folder's own name, straight off the picker — what the switcher shows. */
+  name: string;
+  /** Absolute path on disk, typed by the user. Empty until they do; the report degrades to relative. */
+  path: string;
+  addedAt: number;
+  lastUsedAt: number;
 }
 
 export interface Settings {

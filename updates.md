@@ -2,6 +2,28 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-26 — one folder per project, and a gripe you can close (0.5.0)
+Asked: closing a session should hand it off and start a new one, and the next one lives in a
+different repo — find a better solution than a single connected folder (the floated alternative: one
+central gripes directory reached by long absolute paths). Done: connected folders are now a
+**list**. `Project {id,name,path,addedAt,lastUsedAt}` metadata lives in the worker (`kv.projects`,
+`kv.activeProjectId`), the directory handles live in the panel (`kv.projectHandles`) because a
+handle can't survive `sendMessage`'s JSON hop; `▾` on the folder strip switches in one click and
+`+ connect another folder` adds one. Every session is stamped with `projectId` at creation and
+**writes into that folder for life** — switching never redirects a bundle mid-flight. `done` in the
+footer replaces `+`: copy the prompt (first, while the click's activation is alive), wait out any
+flush, write what's pending, `session:close` → `closed: true` and no active session, so the next
+capture opens a fresh gripe; with 2+ projects the switcher pops open. Activating a closed session
+reopens it and follows it to its project; the session list is scoped to the active project with the
+rest behind one row. The flush effects only ever see the active session, so `finish()` and a late
+Whisper pass call `flushNotes`/`flushRecording` by id themselves. 0.4's single folder migrates into
+project #1 and adopts every existing session, then the legacy keys are deleted. The central-directory
+alternative was rejected in decisions.md — it gives up the one thing that makes this work, a bundle
+inside the repo the agent is already running in. Typecheck + both builds clean; not exercised in
+Chrome (no unpacked-extension harness here) — verify.md flows 10 and 11 are the recipes.
+Touched: types/messages/format/fs (lib), background, App.tsx, styles.css, manifest+package (0.5.0),
+README, cliffnotes/ui/decisions/verify/features×2, plans/2026-07-26-multi-project.md.
+
 ## 2026-07-26 — act on the first agent's feedback about a real walkthrough bundle (0.4.0)
 Asked: an AI agent read a `gripes/` walkthrough and sent seven ranked notes; make the changes. Done,
 all seven: (1) panel asks once for the connected folder's absolute path (kv `projectPath`,

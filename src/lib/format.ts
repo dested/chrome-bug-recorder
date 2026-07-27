@@ -48,6 +48,11 @@ export function mmssFile(ms: number): string {
   return `${pad(Math.floor(total / 60))}${pad(total % 60)}`;
 }
 
+/** A typed-in folder path, trimmed and stripped of a trailing separator. */
+export function cleanPath(path: string): string {
+  return path.trim().replace(/[\\/]+$/, '');
+}
+
 /**
  * A path an agent can paste as-is (`C:\…`, `/…`, `~/…`) versus one that only means
  * something once you already know where the project is.

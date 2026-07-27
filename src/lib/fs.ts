@@ -1,4 +1,4 @@
-import type { Note, Session } from './types';
+import type { Note, Project, Session } from './types';
 import {
   buildManifestTxt,
   buildNotesJson,
@@ -10,10 +10,15 @@ import {
 import { kv } from './db';
 
 /**
- * File System Access plumbing. The directory handle is picked once from the side
- * panel and stashed in IndexedDB; Chrome hands the permission back on request
- * (with a user gesture) on later launches, so "connect once, then it just writes
- * into my repo" holds across browser restarts.
+ * File System Access plumbing. Directory handles are picked from the side panel
+ * and stashed in IndexedDB; Chrome hands the permission back on request (with a
+ * user gesture) on later launches, so "connect once, then it just writes into my
+ * repo" holds across browser restarts.
+ *
+ * There is one handle per connected project, keyed by project id. The handles
+ * live here rather than travelling with the `Project` metadata because messages
+ * between contexts are JSON-serialized and a handle would not survive the trip —
+ * only IndexedDB's structured clone keeps it alive.
  */
 
 declare global {
@@ -31,62 +36,80 @@ declare global {
 }
 
 export const REPORT_DIR = 'gripes';
-const DIR_KEY = 'projectDir';
-const PATH_KEY = 'projectPath';
+/** id → live handle. Panel-owned; the worker never reads it. */
+const HANDLES_KEY = 'projectHandles';
+/** The pre-0.5 single-folder keys, read once at migration and then deleted. */
+const LEGACY_DIR = 'projectDir';
+const LEGACY_PATH = 'projectPath';
+
+export type ProjectHandles = Record<string, FileSystemDirectoryHandle>;
 
 export function fsaSupported(): boolean {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 }
 
+/**
+ * The picker id is frozen — Chrome keys "reopen where you last were" on it, and
+ * it predates the rename. It is shared by every project on purpose: the picker
+ * lands in the parent of the last repo you connected, which is where the next one
+ * usually lives.
+ */
 export async function pickProjectDir(): Promise<FileSystemDirectoryHandle | null> {
   if (!window.showDirectoryPicker) return null;
   try {
-    const handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'bug-recorder-project' });
-    await kv.set(DIR_KEY, handle);
-    return handle;
+    return await window.showDirectoryPicker({ mode: 'readwrite', id: 'bug-recorder-project' });
   } catch (error) {
     if ((error as DOMException)?.name === 'AbortError') return null;
     throw error;
   }
 }
 
-export async function loadProjectDir(): Promise<FileSystemDirectoryHandle | null> {
-  return (await kv.get<FileSystemDirectoryHandle>(DIR_KEY)) ?? null;
+export async function loadHandles(): Promise<ProjectHandles> {
+  return (await kv.get<ProjectHandles>(HANDLES_KEY)) ?? {};
 }
 
-export async function forgetProjectDir() {
-  await kv.delete(DIR_KEY);
-  await kv.delete(PATH_KEY);
+export async function saveHandle(id: string, handle: FileSystemDirectoryHandle): Promise<ProjectHandles> {
+  const next = { ...(await loadHandles()), [id]: handle };
+  await kv.set(HANDLES_KEY, next);
+  return next;
+}
+
+export async function dropHandle(id: string): Promise<ProjectHandles> {
+  const next = { ...(await loadHandles()) };
+  delete next[id];
+  await kv.set(HANDLES_KEY, next);
+  return next;
+}
+
+/** The 0.4 single folder, if this profile has one and hasn't been migrated yet. */
+export async function loadLegacyProject(): Promise<{ handle: FileSystemDirectoryHandle; path: string } | null> {
+  const handle = await kv.get<FileSystemDirectoryHandle>(LEGACY_DIR);
+  if (!handle) return null;
+  return { handle, path: (await kv.get<string>(LEGACY_PATH)) ?? '' };
+}
+
+export async function clearLegacyProject() {
+  await kv.delete(LEGACY_DIR);
+  await kv.delete(LEGACY_PATH);
 }
 
 /**
- * The File System Access API refuses to tell us where the folder is on disk, and a
- * report the agent can't locate cost the first one six tool calls of `find`. So the
- * panel asks once, we remember it, and every report opens with the answer.
+ * Best-known location of a session's folder: absolute when the user told us,
+ * project-relative otherwise. The File System Access API refuses to say where a
+ * folder is on disk, and a report the agent can't locate cost the first one six
+ * tool calls of `find` — so the panel asks once per project and every report
+ * opens with the answer.
  */
-export async function loadProjectPath(): Promise<string> {
-  return (await kv.get<string>(PATH_KEY)) ?? '';
-}
-
-export async function saveProjectPath(path: string): Promise<string> {
-  const clean = path.trim().replace(/[\\/]+$/, '');
-  if (clean) await kv.set(PATH_KEY, clean);
-  else await kv.delete(PATH_KEY);
-  return clean;
-}
-
-/** Best-known location of a session's folder: absolute when the user told us, project-relative otherwise. */
 export function sessionFolder(
   session: Session | null | undefined,
-  root: string,
-  handle: FileSystemDirectoryHandle | null,
+  project: Project | null | undefined,
 ): string {
   const parts = [REPORT_DIR, ...(session ? [session.slug] : [])];
-  if (root) {
-    const sep = root.includes('\\') ? '\\' : '/';
-    return [root, ...parts].join(sep);
+  if (project?.path) {
+    const sep = project.path.includes('\\') ? '\\' : '/';
+    return [project.path, ...parts].join(sep);
   }
-  return [...(handle ? [handle.name] : []), ...parts].join('/');
+  return [...(project ? [project.name] : []), ...parts].join('/');
 }
 
 export type DirPermission = 'granted' | 'prompt' | 'denied';
@@ -202,11 +225,7 @@ export async function deleteSessionFolder(root: FileSystemDirectoryHandle, sessi
   await reports.removeEntry(session.slug, { recursive: true });
 }
 
-export function displayPath(
-  handle: FileSystemDirectoryHandle | null,
-  session?: Session | null,
-  root = '',
-): string {
-  if (!handle) return '';
-  return sessionFolder(session, root, handle);
+export function displayPath(project: Project | null, session?: Session | null): string {
+  if (!project) return '';
+  return sessionFolder(session, project);
 }
