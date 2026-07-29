@@ -12,8 +12,10 @@ import { extname, join, resolve } from 'node:path';
  *   npm run build && npm run preview
  *   http://localhost:8777/gallery.html?w=380,560,900&mode=rec
  *
- * `mode` is rec | empty | nofolder. `w` is a comma-separated list of CSS
+ * `mode` is rec | long | empty | nofolder. `w` is a comma-separated list of CSS
  * widths, each rendered in its own iframe so the panel's media queries see it.
+ * A `WxH` token (1500x400) gives the frame its own height and runs it popped —
+ * that shape is the dock strip.
  * Zero dependencies, like everything else here.
  */
 

@@ -205,7 +205,17 @@ async function setRecordingActive(active: boolean, origin = '') {
   const { drawStart } = await getSettings();
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
-    if (tab.id !== undefined) void tellTab(tab.id, { type: 'recording', active, origin, drawStart });
+    if (tab.id === undefined) continue;
+    const id = tab.id;
+    const command = { type: 'recording', active, origin, drawStart } as const;
+    void (async () => {
+      if (await tellTab(id, command)) return;
+      // Reloading the extension orphans every open tab's content script — the
+      // listener is dead and the tab would silently lose the dock and the ink.
+      // Recording is the moment it must exist, so revive it and tell it again.
+      if (!active || !/^https?:/.test(tab.url ?? '')) return;
+      if (await ensureContentScript(id)) await tellTab(id, command);
+    })();
   }
 }
 

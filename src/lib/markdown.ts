@@ -754,7 +754,7 @@ export function buildManifestTxt(session: Session, recordings: Recording[], fold
 /** How much the gripe holds, said in as few words as the prompt can afford. */
 function contents(session: Session, parts: number): string {
   if (!parts) return `a session called ${session.name}`;
-  return `${parts} walkthrough part${parts === 1 ? '' : 's'}`;
+  return `${parts} recording${parts === 1 ? '' : 's'} on one timeline`;
 }
 
 /**
@@ -764,7 +764,7 @@ function contents(session: Session, parts: number): string {
 export function agentPrompt(session: Session, folder?: string, parts = session.recCount): string {
   const what = contents(session, parts);
   const evidence = parts
-    ? "The images are the evidence — read each part's contact sheets before its timeline, look at every screenshot, and where the words and the frames disagree, believe the frames."
+    ? 'The images are the evidence — read the contact sheets first, then the timeline, look at every screenshot, and where the words and the frames disagree, believe the frames.'
     : 'Look at every image, then fix what it describes.';
   if (folder && looksAbsolute(folder)) {
     const sep = folder.includes('\\') ? '\\' : '/';

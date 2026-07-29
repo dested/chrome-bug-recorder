@@ -31,8 +31,6 @@
   --max: 100%;
   /* the hero: the biggest control in the product, at every width */
   --hero-h: 52px;
-  /* content */
-  --frame-min: 104px;
   /* the timeline. --well is the one surface darker than the canvas: the track
      area reads as a well the way an editor's does. */
   --well: #08080a;
@@ -53,7 +51,6 @@
     --gut: 20px;
     --strip: 13px;
     --hero-h: 60px;
-    --frame-min: 150px;
     --monitor-h: 176px;
     --ruler-h: 22px;
     --track-h: 36px;
@@ -73,7 +70,6 @@
     --strip: 16px;
     --hero-h: 68px;
     --max: 900px;
-    --frame-min: 210px;
     --monitor-h: 224px;
     --ruler-h: 24px;
     --track-h: 42px;
