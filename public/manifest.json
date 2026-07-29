@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gripe",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Rant at your app, get a bug report. Point at what is broken, say what is wrong, hand the markdown to your coding agent.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "sidePanel", "downloads"],
@@ -40,17 +40,13 @@
     }
   ],
   "commands": {
-    "arm-element": {
-      "suggested_key": { "default": "Alt+Shift+B" },
-      "description": "Arm capture (element picker)"
-    },
-    "arm-page": {
-      "suggested_key": { "default": "Alt+Shift+N" },
-      "description": "Quick note about the whole page"
-    },
     "mark-frame": {
       "suggested_key": { "default": "Alt+Shift+M" },
       "description": "Mark this moment while recording a walkthrough"
+    },
+    "draw-live": {
+      "suggested_key": { "default": "Alt+Shift+D" },
+      "description": "Draw on the page while recording"
     }
   },
   "icons": {

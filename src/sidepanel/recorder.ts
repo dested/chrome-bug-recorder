@@ -8,13 +8,16 @@ import type {
 } from '../lib/types';
 import { ACCENT } from '../lib/types';
 import { blobs } from '../lib/db';
+import { send } from '../lib/messages';
 import { noteFileBase, mmssFile } from '../lib/format';
 import { Dictation } from '../content/speech';
 
 /**
  * Screen capture, distilled while it records — claude-real-video's dedup shape
- * (sliding window of KEPT frames, no forced keyframes, uniform thinning past the
- * cap), recalibrated for screen recordings. The reference compares 16×16 RGB
+ * (sliding window of KEPT frames, forced keyframes only where a human or the page
+ * said so: marks, clicks, navigations, and a 15 s heartbeat when the screen is
+ * drifting below the dedup bar, uniform thinning past the cap), recalibrated for
+ * screen recordings. The reference compares 16×16 RGB
  * signatures by *percent* changed with an 8% bar — tuned for full-frame video.
  * On a screen recording the action usually lives in one region (a game canvas,
  * a terminal pane), and a 16×16 signature averages it into nothing: run against
@@ -30,6 +33,11 @@ import { Dictation } from '../content/speech';
  * real bundle: frames carry the mouse (drawn when the capture can be mapped, named
  * by selector always — "these over here" is otherwise unresolvable), and the mark
  * hotkey forces a keyframe mid-sentence.
+ *
+ * Nothing here lives only in panel memory. Every MediaRecorder chunk is written to
+ * IndexedDB as it arrives and the meta is pushed to the worker every couple of
+ * seconds, so a panel that dies mid-ramble loses the last second, not the part —
+ * `recording:recover` reassembles the chunks into the video.
  */
 
 const SAMPLE_MS = 500; // candidate cadence — stands in for the reference's scene-detect + 1s density floor
@@ -37,12 +45,15 @@ const SIG_SIZE = 64; // 64×64 RGB cells — fine enough that a sprite-sized cha
 const PIX_TOL = 25; // a cell counts as changed if any channel moves more than this
 const DEDUP_THRESHOLD = 8; // cells that must change for a frame to be new (~0.2% of 4096 — localized action counts)
 const DEDUP_WINDOW = 4; // vs the last N KEPT frames — A-B-A cutaways don't come back
+const BEAT_MS = 15000; // a minute of narration over a slowly-shifting screen must not produce zero frames
+const CLICK_FORCE_MS = 1200; // floor between click-forced keyframes — a double-click is one moment
 const MAX_FRAMES = 150; // uniform thin after dedup so survivors stay spread across the recording
 const MAX_FRAME_W = 1920;
 const JPEG_QUALITY = 0.9;
 const MAX_EVENTS = 200;
 const POINTER_STALE_MS = 2500; // a pointer older than this says nothing about this frame
 const MAP_TOLERANCE = 0.02; // aspect-ratio match required before we believe a coordinate mapping
+const PROGRESS_MS = 1500; // floor between meta pushes — the worker writes IndexedDB on every one
 
 const MIME_TYPES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
 
@@ -137,14 +148,17 @@ function drawCrosshair(ctx: CanvasRenderingContext2D, x: number, y: number, widt
 }
 
 export class Recorder {
-  readonly sessionId: string;
-
   private stream: MediaStream | null = null;
   private micStream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
   private recorder: MediaRecorder | null = null;
   private mime = 'video/webm';
   private chunks: Blob[] = [];
+  /** Chunk blobs known to be on disk. Only bumped after the write lands, so a
+   *  recovery never reads a key that isn't there yet. */
+  private chunkCount = 0;
+  private chunkSeq = 0;
+  private lastProgress = 0;
 
   private dictation: Dictation | null = null;
   private micState: MicState = 'off';
@@ -158,8 +172,11 @@ export class Recorder {
 
   private frames: RecordingFrame[] = [];
   private marks = 0;
-  /** The mark hotkey fired: the next sample is kept whatever dedup thinks. */
-  private forced = false;
+  /** Something demanded the next sample be kept whatever dedup thinks, and what it was. */
+  private forcedWhy: 'mark' | 'click' | 'nav' | null = null;
+  private lastClickForce = 0;
+  /** When the last kept frame landed, ms from start — the heartbeat measures from here. */
+  private lastKeptT = 0;
   /** Signatures of the KEPT frames only — that ring *is* the dedup window. */
   private sigs: Uint8ClampedArray[] = [];
   private sampled = 0;
@@ -179,9 +196,9 @@ export class Recorder {
     private lang: string,
     /** Origin of the tab that was in front at Record. Telemetry from anywhere else is noise. */
     readonly scope: string,
-  ) {
-    this.sessionId = crypto.randomUUID();
-  }
+    /** The part's id, minted by the panel so `recording:start` and every blob key agree. */
+    readonly id: string,
+  ) {}
 
   // ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -192,6 +209,10 @@ export class Recorder {
     });
     this.stream = stream;
     this.startedAt = Date.now();
+    // Hold the first push off by one throttle window: the panel only sends
+    // `recording:start` once this resolves, and progress for a part the worker
+    // hasn't opened yet is dropped on the floor.
+    this.lastProgress = this.startedAt;
 
     const video = document.createElement('video');
     video.muted = true;
@@ -226,7 +247,17 @@ export class Recorder {
     ]);
     const recorder = new MediaRecorder(recorded, { mimeType: this.mime });
     recorder.ondataavailable = (e) => {
-      if (e.data.size) this.chunks.push(e.data);
+      if (!e.data.size) return;
+      this.chunks.push(e.data);
+      // Also to disk: in memory these die with the panel, and a webm assembled
+      // from chunk 1..n is playable even when nobody ever called stop().
+      const n = ++this.chunkSeq;
+      void blobs
+        .set(`${this.id}:chunk:${n}`, e.data)
+        .then(() => {
+          if (n > this.chunkCount) this.chunkCount = n;
+        })
+        .catch(() => {});
     };
     recorder.start(1000);
     this.recorder = recorder;
@@ -244,6 +275,7 @@ export class Recorder {
             if (text) this.segments.push({ t: this.utteranceStart ?? this.elapsed(), text });
             this.utteranceStart = null;
             this.emit();
+            this.saveProgress();
           },
           onState: (state) => {
             this.micState = state;
@@ -261,7 +293,10 @@ export class Recorder {
       // or finish() would thin/renumber while that sample is still writing.
       if (!this.sampling) this.pending = this.sample();
     }, SAMPLE_MS);
-    this.tickTimer = window.setInterval(() => this.emit(), 1000);
+    this.tickTimer = window.setInterval(() => {
+      this.emit();
+      this.saveProgress();
+    }, 1000);
     this.pending = this.sample();
   }
 
@@ -286,7 +321,25 @@ export class Recorder {
   /** Capture this instant no matter what dedup thinks — the human said it matters. */
   mark() {
     if (!this.stream) return;
-    this.forced = true;
+    this.forcedWhy = 'mark';
+    if (!this.sampling) this.pending = this.sample();
+  }
+
+  /**
+   * The page said something happened — a click, or a route change. Same kick as
+   * `mark()`, but it never outranks a mark that's still waiting for its sample,
+   * and clicks are rate-limited: a walkthrough is mostly clicking.
+   */
+  force(why: 'click' | 'nav', origin?: string) {
+    if (!this.stream) return;
+    if (!this.inScope(origin)) return;
+    if (why === 'click') {
+      const now = Date.now();
+      if (now - this.lastClickForce < CLICK_FORCE_MS) return;
+      this.lastClickForce = now;
+    }
+    if (this.forcedWhy === 'mark') return;
+    this.forcedWhy = why;
     if (!this.sampling) this.pending = this.sample();
   }
 
@@ -305,8 +358,8 @@ export class Recorder {
     if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
 
     this.sampling = true;
-    const forced = this.forced;
-    this.forced = false;
+    const forced = this.forcedWhy;
+    this.forcedWhy = null;
     try {
       this.sampled++;
       sigCtx.drawImage(video, 0, 0, SIG_SIZE, SIG_SIZE);
@@ -317,13 +370,22 @@ export class Recorder {
         ? Math.min(...this.sigs.map((k) => cellDiff(sig, k)))
         : undefined;
       let reason: RecordingFrame['reason'];
-      if (forced) {
+      if (forced === 'mark') {
         reason = 'mark';
         this.marks++;
+      } else if (forced) {
+        // A click or a nav that changed literally nothing is a duplicate, and a
+        // duplicate spends one of the 150 slots the whole walkthrough shares.
+        if (minDist !== undefined && minDist === 0) return;
+        reason = forced;
       } else if (minDist === undefined) {
         reason = 'start';
+      } else if (minDist <= DEDUP_THRESHOLD) {
+        // Below the bar, but the screen *is* moving and nothing has been kept in
+        // a while — a drifting low-contrast UI would otherwise go dark for minutes.
+        if (!(minDist > 0 && t - this.lastKeptT > BEAT_MS)) return;
+        reason = 'beat';
       } else {
-        if (minDist <= DEDUP_THRESHOLD) return;
         reason = 'change';
       }
       const dist = minDist; // changed-cell count vs the closest kept frame
@@ -343,7 +405,7 @@ export class Recorder {
       }
 
       const index = this.frames.length + 1;
-      await blobs.set(`${this.sessionId}:frame:${index}`, await toJpeg(canvas));
+      await blobs.set(`${this.id}:frame:${index}`, await toJpeg(canvas));
       this.frames.push({
         index,
         t,
@@ -352,9 +414,11 @@ export class Recorder {
         ...(dist === undefined ? {} : { dist }),
         ...(pointer ? { pointer } : {}),
       });
+      this.lastKeptT = t;
       this.sigs.push(sig);
       if (this.sigs.length > DEDUP_WINDOW) this.sigs.shift();
       this.emit();
+      this.saveProgress();
     } finally {
       this.sampling = false;
     }
@@ -369,7 +433,78 @@ export class Recorder {
     return { ...(mapped ?? {}), selector: p.selector, text: p.text };
   }
 
+  // ── persistence ─────────────────────────────────────────────────────────
+
+  /**
+   * The meta as it stands right now — the same object `finish()` returns, minus
+   * the thinning pass. The worker overwrites the part's meta wholesale with it,
+   * so a panel that dies still leaves a readable part behind.
+   */
+  private snapshot(): RecordingMeta {
+    return {
+      startedAt: this.startedAt,
+      durationMs: this.elapsed(),
+      sampled: this.sampled,
+      frames: this.frames,
+      transcript: this.segments,
+      events: this.events,
+      ...(this.scope ? { eventScope: this.scope } : {}),
+      ...(this.dropped ? { droppedEvents: this.dropped } : {}),
+      videoFile: 'walkthrough.webm',
+      written: false,
+    };
+  }
+
+  /** Throttled: this is a write to IndexedDB, not a render. */
+  private saveProgress() {
+    if (this.stopped) return;
+    const now = Date.now();
+    if (now - this.lastProgress < PROGRESS_MS) return;
+    this.lastProgress = now;
+    void send({
+      type: 'recording:progress',
+      id: this.id,
+      meta: this.snapshot(),
+      mime: this.mime,
+      chunks: this.chunkCount,
+    }).catch(() => {});
+  }
+
   // ── teardown ────────────────────────────────────────────────────────────
+
+  /**
+   * Give up the part without producing one: the screen share was granted but
+   * `recording:start` never landed, so there is nothing for these bytes to
+   * belong to. Tracks first — a share left running is the visible failure.
+   */
+  async cancel() {
+    this.stopped = Promise.reject(new Error('cancelled'));
+    this.stopped.catch(() => {});
+    this.teardown();
+    const frames = this.frames.map((f) => blobs.delete(`${this.id}:frame:${f.index}`));
+    const chunks = Array.from({ length: this.chunkSeq }, (_, i) =>
+      blobs.delete(`${this.id}:chunk:${i + 1}`),
+    );
+    await Promise.all([...frames, ...chunks]).catch(() => {});
+  }
+
+  /** Timers, dictation, streams, the offscreen video element. Safe to call twice. */
+  private teardown() {
+    if (this.sampleTimer !== null) clearInterval(this.sampleTimer);
+    if (this.tickTimer !== null) clearInterval(this.tickTimer);
+    this.sampleTimer = null;
+    this.tickTimer = null;
+    this.dictation?.stop();
+    this.dictation = null;
+    if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
+    this.recorder = null;
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.micStream?.getTracks().forEach((track) => track.stop());
+    this.video?.remove();
+    this.stream = null;
+    this.micStream = null;
+    this.video = null;
+  }
 
   private async finish(): Promise<RecordingMeta> {
     if (this.sampleTimer !== null) clearInterval(this.sampleTimer);
@@ -392,16 +527,16 @@ export class Recorder {
       for (let i = 0; i < budget; i++) keepIdx.add(rest[Math.floor(i * step)]);
       const survivors = this.frames.filter((_, i) => keepIdx.has(i));
       const dropped = this.frames.filter((_, i) => !keepIdx.has(i));
-      await Promise.all(dropped.map((f) => blobs.delete(`${this.sessionId}:frame:${f.index}`)));
+      await Promise.all(dropped.map((f) => blobs.delete(`${this.id}:frame:${f.index}`)));
       // Renumber ascending: a survivor's new index is always ≤ its old one, and the
       // slot it moves into has already been vacated — never re-key out of order.
       for (let n = 0; n < survivors.length; n++) {
         const f = survivors[n];
         const newIndex = n + 1;
         if (newIndex !== f.index) {
-          const blob = await blobs.get(`${this.sessionId}:frame:${f.index}`);
-          if (blob) await blobs.set(`${this.sessionId}:frame:${newIndex}`, blob);
-          await blobs.delete(`${this.sessionId}:frame:${f.index}`);
+          const blob = await blobs.get(`${this.id}:frame:${f.index}`);
+          if (blob) await blobs.set(`${this.id}:frame:${newIndex}`, blob);
+          await blobs.delete(`${this.id}:frame:${f.index}`);
           f.index = newIndex;
           f.file = `frames/${noteFileBase(newIndex)}-${mmssFile(f.t)}.jpg`; // t survives — citations stay valid
         }
@@ -417,7 +552,10 @@ export class Recorder {
       });
     }
     this.recorder = null;
-    await blobs.set(`${this.sessionId}:video`, new Blob(this.chunks, { type: this.mime }));
+    await blobs.set(`${this.id}:video`, new Blob(this.chunks, { type: this.mime }));
+    // The whole video is on disk now, so the pieces it was insurance against go.
+    // Only after the write — a crash between the two must still be recoverable.
+    for (let n = 1; n <= this.chunkSeq; n++) await blobs.delete(`${this.id}:chunk:${n}`);
 
     this.stream?.getTracks().forEach((track) => track.stop());
     this.micStream?.getTracks().forEach((track) => track.stop());
@@ -426,18 +564,7 @@ export class Recorder {
     this.micStream = null;
     this.video = null;
 
-    return {
-      startedAt: this.startedAt,
-      durationMs: Date.now() - this.startedAt,
-      sampled: this.sampled,
-      frames: this.frames,
-      transcript: this.segments,
-      events: this.events,
-      ...(this.scope ? { eventScope: this.scope } : {}),
-      ...(this.dropped ? { droppedEvents: this.dropped } : {}),
-      videoFile: 'walkthrough.webm',
-      written: false,
-    };
+    return this.snapshot();
   }
 
   // ── plumbing ────────────────────────────────────────────────────────────

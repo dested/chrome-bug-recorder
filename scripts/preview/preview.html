@@ -6,94 +6,300 @@
     <title>Gripe — layout preview</title>
     <script>
       // Layout harness: stubs the chrome APIs the panel touches on mount and seeds
-      // IndexedDB so the folder reads as connected. Lives in the scratchpad; copied
+      // IndexedDB so the inbox reads as connected. Lives in the scratchpad; copied
       // into dist/ after a build (dist/ is wiped every time).
+      //
+      // Shapes are DB v2: a gripe is a container, its walkthroughs are Recording
+      // records in their own store, and the session only counts them (recCount).
       const MODE = new URLSearchParams(location.search).get('mode') || 'rec';
       const SID = 'preview-session';
+      const NOW = Date.now();
 
-      const REC = {
-        startedAt: Date.now() - 143000,
-        durationMs: 143000,
-        sampled: 286,
-        frames: [
-          { index: 1, t: 0, file: 'frames/01-0000.jpg', reason: 'start' },
-          { index: 2, t: 21000, file: 'frames/02-0021.jpg', reason: 'change', dist: 41 },
-          { index: 3, t: 48500, file: 'frames/03-0048.jpg', reason: 'mark' },
-          { index: 4, t: 77000, file: 'frames/04-0077.jpg', reason: 'change', dist: 66 },
-          { index: 5, t: 96000, file: 'frames/05-0096.jpg', reason: 'change', dist: 12 },
-          { index: 6, t: 131000, file: 'frames/06-0131.jpg', reason: 'change', dist: 88 },
-        ],
-        transcript: [
-          { t: 3000, d: 6000, text: 'okay so this is the checkout page, and the totals row here is wrong' },
-          { t: 21000, d: 7000, text: 'watch what happens when I bump the quantity — the subtotal updates but the tax does not' },
-          { t: 48500, d: 5000, text: 'right there, that number should be nine eighty, not eight forty' },
-          { t: 96000, d: 4000, text: 'and the console throws on every one of those clicks' },
-        ],
-        transcriber: 'whisper',
-        reviewed: false,
-        events: [{ level: 'error', message: 'TypeError: cannot read properties of undefined', ts: Date.now() }],
-        eventScope: 'http://localhost:3000',
-        videoFile: 'walkthrough.webm',
-        written: true,
-        rev: 1,
+      const REC1 = {
+        id: 'preview-rec-1',
+        sessionId: SID,
+        index: 1,
+        createdAt: NOW - 900000,
+        state: 'done',
+        mime: 'video/webm',
+        chunks: 0,
+        meta: {
+          startedAt: NOW - 900000,
+          durationMs: 143000,
+          sampled: 286,
+          frames: [
+            { index: 1, t: 0, file: 'frames/01-0000.jpg', reason: 'start' },
+            { index: 2, t: 21000, file: 'frames/02-0021.jpg', reason: 'change', dist: 41 },
+            { index: 3, t: 48500, file: 'frames/03-0048.jpg', reason: 'mark' },
+            { index: 4, t: 77000, file: 'frames/04-0077.jpg', reason: 'change', dist: 66 },
+            { index: 5, t: 96000, file: 'frames/05-0096.jpg', reason: 'change', dist: 12 },
+            { index: 6, t: 131000, file: 'frames/06-0131.jpg', reason: 'change', dist: 88 },
+          ],
+          transcript: [
+            { t: 3000, d: 6000, text: 'okay so this is the checkout page, and the totals row here is wrong' },
+            { t: 21000, d: 7000, text: 'watch what happens when I bump the quantity — the subtotal updates but the tax does not' },
+            { t: 48500, d: 5000, text: 'right there, that number should be nine eighty, not eight forty' },
+            { t: 96000, d: 4000, text: 'and the console throws on every one of those clicks' },
+          ],
+          transcriber: 'whisper',
+          reviewed: false,
+          events: [{ level: 'error', message: 'TypeError: cannot read properties of undefined', ts: NOW - 800000 }],
+          eventScope: 'http://localhost:3000',
+          videoFile: 'walkthrough.webm',
+          written: true,
+          rev: 1,
+        },
       };
 
-      const SESSIONS = {
-        rec: [
-          { id: SID, name: 'Checkout totals are wrong', slug: '2026-07-26-2305-checkout-totals-are-wrong', createdAt: Date.now() - 143000, updatedAt: Date.now(), origin: 'http://localhost:3000', noteCount: 0, kind: 'recording', recording: REC },
-          { id: 'old-1', name: 'Nav collapses on iPad', slug: '2026-07-25-1102-nav-collapses', createdAt: Date.now() - 86400000, updatedAt: Date.now() - 86400000, origin: 'http://localhost:3000', noteCount: 4, closed: true },
-        ],
-        notes: [
-          { id: SID, name: 'Checkout flow', slug: '2026-07-26-2305-checkout-flow', createdAt: Date.now() - 900000, updatedAt: Date.now(), origin: 'http://localhost:3000', noteCount: 3 },
-          { id: 'old-1', name: 'Nav collapses on iPad', slug: '2026-07-25-1102-nav-collapses', createdAt: Date.now() - 86400000, updatedAt: Date.now() - 86400000, origin: 'http://localhost:3000', noteCount: 4, closed: true },
-        ],
-        empty: [],
+      // Part two: shorter, cut off when the panel died, reassembled from chunks.
+      const REC2 = {
+        id: 'preview-rec-2',
+        sessionId: SID,
+        index: 2,
+        createdAt: NOW - 300000,
+        state: 'done',
+        interrupted: true,
+        mime: 'video/webm',
+        chunks: 0,
+        meta: {
+          startedAt: NOW - 300000,
+          durationMs: 47000,
+          sampled: 94,
+          frames: [
+            { index: 1, t: 0, file: 'frames/01-0000.jpg', reason: 'start' },
+            { index: 2, t: 19000, file: 'frames/02-0019.jpg', reason: 'mark' },
+            { index: 3, t: 41000, file: 'frames/03-0041.jpg', reason: 'change', dist: 52 },
+          ],
+          transcript: [
+            { t: 2000, d: 5000, text: 'second pass — the same row after a hard reload' },
+            { t: 19000, d: 6000, text: 'still eight forty, so it is not a caching thing' },
+          ],
+          transcriber: 'whisper',
+          reviewed: true,
+          events: [],
+          eventScope: 'http://localhost:3000',
+          videoFile: 'walkthrough.webm',
+          written: true,
+          rev: 1,
+        },
       };
 
-      const NOTES = [
-        {
-          id: 'n1', sessionId: SID, index: 1, createdAt: Date.now() - 800000,
-          text: 'the Place order button does nothing on the second click — first click works, second one just sits there',
-          mode: 'element', url: 'http://localhost:3000/checkout', title: 'Checkout',
-          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
-          target: { selector: '#place-order', tag: 'button', classes: [], attrs: {}, html: '<button id="place-order">', rect: { x: 0, y: 0, width: 180, height: 44 } },
-          events: [{ level: 'error', message: 'x', ts: 1 }, { level: 'network', message: 'y', ts: 2 }],
-          fullFile: '01-full.png', cropFile: '01-target.png', written: true,
-        },
-        {
-          id: 'n2', sessionId: SID, index: 2, createdAt: Date.now() - 400000,
-          text: 'tax line is missing entirely below the subtotal',
-          mode: 'region', url: 'http://localhost:3000/checkout', title: 'Checkout',
-          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
-          region: { x: 20, y: 40, width: 320, height: 120 },
-          events: [], fullFile: '02-full.png', written: true,
-        },
-        {
-          id: 'n3', sessionId: SID, index: 3, createdAt: Date.now() - 90000,
-          text: '', mode: 'page', url: 'http://localhost:3000/checkout/confirm', title: 'Confirm',
-          viewport: { width: 1440, height: 900, dpr: 2, scrollX: 0, scrollY: 0 },
-          events: [], fullFile: '03-full.png', written: true,
-        },
+      // ── the long one ────────────────────────────────────────────────────
+      // 10:18 across two takes. This is the acceptance test for the timeline: at
+      // fit zoom nothing may overlap, the voice lane has to read as structure,
+      // and scrubbing has to stay smooth. Everything is deterministic (one LCG)
+      // so a reload shows the same footage.
+      const PHRASES = [
+        'okay so this is the checkout page and the totals row down here is wrong',
+        'watch the subtotal when I bump the quantity up by one',
+        'the tax line never moves, it just sits at the old value',
+        'right there, that number should be nine eighty and not eight forty',
+        'let me reload it and try the whole thing again from a clean cart',
+        'same thing, so it is not a caching problem on our side',
+        'the console throws on every single one of those clicks',
+        'scroll down, there are three more rows doing the same thing',
+        'this promo code field also swallows the first character you type',
+        'I am going to open the network tab so you can see the payload',
+        'the request goes out with the old quantity, look at the body',
+        'so whatever recalculates the tax runs before the state updates',
+        'that is probably the bug, it is a stale closure somewhere',
+        'let me show you what it does on a fresh session as well',
+        'clicking apply does nothing until you blur the field first',
+        'and now the total is a different wrong number, which is worse',
+        'the shipping estimate is fine, that one recalculates properly',
+        'so it is specific to whatever handles the tax breakdown',
+        'here is the same flow on the mobile width, it is worse',
+        'the row wraps and the numbers end up under the labels',
+        'you can barely read which value belongs to which line',
+        'I want the whole totals block rebuilt honestly',
+        'anyway back to the desktop layout for a second',
+        'if I remove an item entirely the total goes negative',
+        'that should never be possible, there is no clamp anywhere',
+        'the discount is being applied twice on the second render',
+        'let me mark this one because it is the clearest reproduction',
+        'and that is the state I want you to start looking at',
+        'one more thing before I stop talking about this page',
+        'the error boundary catches it but the page stays broken',
       ];
 
-      const STATE = {
-        sessions: SESSIONS[MODE] ?? [],
-        activeSessionId: MODE === 'empty' ? null : SID,
-        notes: MODE === 'notes' ? NOTES : [],
-        settings: { autoDictate: true, spotlight: true, chain: false, autoSend: true, autoSendMs: 3000, lang: '' },
+      const lcg = (seed) => {
+        let s = seed >>> 0;
+        return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
       };
+
+      /** Speech in bursts with quiet stretches, plus one long silence you can see. */
+      function talk(durMs, seed, gapAt, gapLen) {
+        const rnd = lcg(seed);
+        const out = [];
+        let t = 1200;
+        let gapped = !gapAt;
+        for (let i = 0; out.length < 400; i++) {
+          if (!gapped && t >= gapAt) {
+            t += gapLen;
+            gapped = true;
+          }
+          const text = PHRASES[(i * 7 + seed) % PHRASES.length];
+          const d = Math.min(6500, 1200 + text.split(' ').length * 240);
+          if (t + d > durMs - 1500) break;
+          out.push({ t: Math.round(t), d, text });
+          const r = rnd();
+          t += d + (r < 0.7 ? 140 + rnd() * 420 : r < 0.92 ? 900 + rnd() * 2000 : 4000 + rnd() * 4800);
+        }
+        return out;
+      }
+
+      function keyframes(durMs, count, seed, marks) {
+        const rnd = lcg(seed);
+        const step = durMs / count;
+        const out = [];
+        for (let i = 0; i < count; i++) {
+          const t = Math.round(i * step + rnd() * step * 0.7);
+          out.push({
+            index: i + 1,
+            t,
+            file: `frames/${String(i + 1).padStart(2, '0')}-${String(Math.floor(t / 1000)).padStart(4, '0')}.jpg`,
+            reason: marks.includes(i) ? 'mark' : i === 0 ? 'start' : 'change',
+            dist: 30 + Math.round(rnd() * 60),
+          });
+        }
+        return out;
+      }
+
+      const long = (id, index, ago, durMs, frameCount, seed, marks, gapAt, gapLen) => ({
+        id,
+        sessionId: SID,
+        index,
+        createdAt: NOW - ago,
+        state: 'done',
+        mime: 'video/webm',
+        chunks: 0,
+        meta: {
+          startedAt: NOW - ago,
+          durationMs: durMs,
+          sampled: Math.round(durMs / 500),
+          frames: keyframes(durMs, frameCount, seed, marks),
+          transcript: talk(durMs, seed, gapAt, gapLen),
+          transcriber: 'whisper',
+          reviewed: index > 1,
+          events: [],
+          eventScope: 'http://localhost:3000',
+          videoFile: 'walkthrough.webm',
+          written: true,
+          rev: 1,
+        },
+      });
+
+      // 6:40 + 3:38 = 10:18, 150 keyframes, 8 marks, a 40s silence at 3:00.
+      const LONG = [
+        long('preview-long-1', 1, 1800000, 400000, 97, 11, [4, 22, 41, 63, 88], 180000, 40000),
+        long('preview-long-2', 2, 600000, 218000, 53, 29, [7, 26, 44], 0, 0),
+      ];
+
+      // rec: two takes on one axis · long: ten minutes of it · nofolder: rec with
+      // no inbox · empty: no gripe at all. Anything else falls back to rec.
+      const BY_MODE = {
+        rec: { recordings: [REC1, REC2] },
+        long: { recordings: LONG },
+        nofolder: { recordings: [REC1, REC2] },
+        empty: { recordings: [] },
+      };
+      const CONTENT = BY_MODE[MODE] ?? BY_MODE.rec;
+
+      const ACTIVE = {
+        id: SID,
+        name: 'Checkout totals are wrong',
+        slug: '2026-07-28-2305-checkout-totals-are-wrong',
+        createdAt: NOW - 900000,
+        updatedAt: NOW,
+        origin: 'http://localhost:3000',
+        recCount: CONTENT.recordings.length,
+      };
+      const CLOSED = {
+        id: 'old-1',
+        name: 'Nav collapses on iPad',
+        slug: '2026-07-25-1102-nav-collapses',
+        createdAt: NOW - 86400000,
+        updatedAt: NOW - 86400000,
+        origin: 'http://localhost:3000',
+        recCount: 1,
+        closed: true,
+      };
+
+      const STATE = {
+        sessions: MODE === 'empty' ? [] : [ACTIVE, CLOSED],
+        activeSessionId: MODE === 'empty' ? null : SID,
+        recordings: CONTENT.recordings,
+        settings: { drawStart: true, lang: '' },
+      };
+
+      /**
+       * The mutating messages the timeline sends, applied to STATE the way the
+       * background applies them to IndexedDB — otherwise dragging and deleting
+       * look like they worked and then snap back on the next refresh.
+       */
+      const recOf = (id) => STATE.recordings.find((r) => r.id === id);
+      const touched = (rec) => {
+        rec.meta.rev = (rec.meta.rev ?? 0) + 1;
+        rec.meta.written = false;
+      };
+      /** Everything addressed at one record, so each gets a single write. */
+      function groupByRec(list) {
+        const byRec = new Map();
+        for (const item of list) byRec.set(item.recId, [...(byRec.get(item.recId) ?? []), item]);
+        return byRec;
+      }
+
+      function mutate(m) {
+        if (m.type === 'timeline:move') {
+          for (const [id, moves] of groupByRec(m.moves)) {
+            const rec = recOf(id);
+            if (!rec) continue;
+            for (const mv of moves) {
+              const target =
+                mv.kind === 'frame'
+                  ? rec.meta.frames.find((f) => f.index === mv.index)
+                  : rec.meta.transcript[mv.index];
+              if (target) target.tl = mv.tl;
+            }
+            touched(rec);
+          }
+        } else if (m.type === 'timeline:delete') {
+          for (const [id, items] of groupByRec(m.items)) {
+            const rec = recOf(id);
+            if (!rec) continue;
+            const frames = new Set(items.filter((i) => i.kind === 'frame').map((i) => i.index));
+            rec.meta.frames = rec.meta.frames.filter((f) => !frames.has(f.index));
+            // Lines are positional: splice from the back so the earlier ones hold.
+            const lines = items.filter((i) => i.kind === 'line').map((i) => i.index).sort((a, b) => b - a);
+            for (const index of lines) rec.meta.transcript.splice(index, 1);
+            touched(rec);
+          }
+        } else if (m.type === 'recording:line:update') {
+          const rec = recOf(m.id);
+          if (rec?.meta.transcript[m.index]) {
+            rec.meta.transcript[m.index].text = m.text;
+            touched(rec);
+          }
+        } else if (m.type === 'recording:reviewed') {
+          const rec = recOf(m.id);
+          if (rec) {
+            rec.meta.reviewed = true;
+            touched(rec);
+          }
+        }
+      }
 
       window.chrome = {
         runtime: {
-          sendMessage: async (m) => (m.type === 'state:get' ? STATE : { ok: true }),
+          sendMessage: async (m) => {
+            // A fresh object every read: React bails out of a render when the
+            // state it is handed is the one it already has.
+            if (m.type === 'state:get') return { ...STATE, recordings: [...STATE.recordings] };
+            mutate(m);
+            return { ok: true };
+          },
           onMessage: { addListener() {}, removeListener() {} },
           getURL: (p) => p,
-        },
-        commands: {
-          getAll: async () => [
-            { name: 'arm-element', shortcut: 'Alt+Shift+B' },
-            { name: 'mark-frame', shortcut: 'Alt+Shift+M' },
-          ],
         },
         tabs: { query: async () => [{ id: 1, title: 'Checkout', url: 'http://localhost:3000/checkout' }], create() {} },
         downloads: { download() {} },
@@ -103,11 +309,12 @@
       // checkPermission() answers 'granted', and only .name is ever displayed.
       function seed() {
         return new Promise((done) => {
-          const req = indexedDB.open('bug-recorder', 1);
+          const req = indexedDB.open('bug-recorder', 2);
           req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
             if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'id' }).createIndex('bySession', 'sessionId');
+            if (!db.objectStoreNames.contains('recordings')) db.createObjectStore('recordings', { keyPath: 'id' }).createIndex('bySession', 'sessionId');
             if (!db.objectStoreNames.contains('blobs')) db.createObjectStore('blobs');
             if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
           };
@@ -117,6 +324,15 @@
               new Promise((r) => {
                 const t = db.transaction(store, 'readwrite').objectStore(store).put(value, key);
                 t.onsuccess = t.onerror = r;
+              });
+            // 150 frames in the `long` seed: one transaction each is seconds of
+            // waiting before the panel even paints. One transaction for all of them.
+            const putMany = (store, entries) =>
+              new Promise((r) => {
+                const t = db.transaction(store, 'readwrite');
+                const os = t.objectStore(store);
+                for (const [key, value] of entries) os.put(value, key);
+                t.oncomplete = t.onerror = r;
               });
             const del = (store, key) =>
               new Promise((r) => {
@@ -130,10 +346,15 @@
               await put('kv', { name: 'gripes' }, 'projectDir');
               await put('kv', 'C:\\Users\\dested\\gripes', 'projectPath');
             }
-            for (const f of REC.frames) await put('blobs', await shot(f.index), `${SID}:frame:${f.index}`);
-            for (const n of NOTES) {
-              await put('blobs', await shot(n.index + 10), `${n.id}:full`);
-              if (n.cropFile) await put('blobs', await shot(n.index + 20), `${n.id}:crop`);
+            for (const rec of CONTENT.recordings) {
+              await put('recordings', rec);
+              const frames = await Promise.all(
+                rec.meta.frames.map(async (f) => [
+                  `${rec.id}:frame:${f.index}`,
+                  await shot(rec.index * 7 + f.index, `${rec.index}·${clock(f.t)}`),
+                ]),
+              );
+              await putMany('blobs', frames);
             }
             db.close();
             done();
@@ -141,8 +362,15 @@
         });
       }
 
-      /** Something screenshot-shaped, so the grid isn't a wall of flat rectangles. */
-      function shot(seed) {
+      const clock = (ms) =>
+        `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+
+      /**
+       * Something screenshot-shaped, so the strip isn't a wall of flat rectangles.
+       * The stamped label is what makes scrubbing legible in the preview: if the
+       * monitor doesn't change, the scrub is broken.
+       */
+      function shot(seed, label) {
         const c = document.createElement('canvas');
         c.width = 640;
         c.height = 400;
@@ -162,17 +390,31 @@
         }
         x.fillStyle = '#2c333d';
         for (let i = 0; i < 8; i++) x.fillRect(20, 60 + i * 26, 110, 12);
+        if (label) {
+          x.fillStyle = 'rgba(0,0,0,.6)';
+          x.fillRect(176, 296, 268, 76);
+          x.fillStyle = '#f2efec';
+          x.font = '600 46px ui-monospace, monospace';
+          x.fillText(label, 192, 350);
+        }
         return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
       }
 
       seed().then(() => {
         const s = document.createElement('script');
         s.type = 'module';
-        s.src = '/sidepanel.js';
+        // dist/ is rebuilt constantly under fixed filenames and the server sends no
+        // cache headers, so without this you debug the previous build.
+        s.src = '/sidepanel.js?t=' + Date.now();
         document.body.appendChild(s);
       });
     </script>
-    <link rel="stylesheet" href="/assets/sidepanel.css" />
+    <script>
+      // Same reason as sidepanel.js: the stylesheet name never changes either.
+      document.write(
+        '<link rel="stylesheet" href="/assets/sidepanel.css?t=' + Date.now() + '">',
+      );
+    </script>
   </head>
   <body>
     <div id="root"></div>

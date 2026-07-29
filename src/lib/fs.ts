@@ -1,23 +1,26 @@
-import type { Note, Session } from './types';
-import {
-  buildManifestTxt,
-  buildNotesJson,
-  buildRecordingJson,
-  buildRecordingReport,
-  buildReport,
-  buildTranscriptTxt,
-} from './markdown';
-import { cleanPath } from './format';
+import type { Recording, Session } from './types';
+import { buildManifestTxt, buildRecordingJson, buildReport, buildTranscriptTxt } from './markdown';
+import { cleanPath, recDirName } from './format';
 import { kv } from './db';
 
 /**
- * File System Access plumbing. There is exactly **one** gripe folder: it is picked
- * once from the side panel and stashed in IndexedDB, and Chrome hands the
- * permission back on request (with a user gesture) on later launches, so "connect
- * once, then it just writes there" holds across browser restarts.
+ * File System Access plumbing. There is exactly **one** folder: the gripe inbox.
+ * It is picked once from the side panel and stashed in IndexedDB, and Chrome hands
+ * the permission back on request (with a user gesture) on later launches, so
+ * "connect once, then it just writes there" holds across browser restarts.
  *
  * One folder, deliberately. 0.5 tried a list of per-project folders for a day and
- * it was more bookkeeping than it was worth — see decisions.md.
+ * it was more bookkeeping than it was worth — see decisions.md. 0.7 stopped
+ * pretending that folder is "the repo you're in": it is a global inbox, and every
+ * prompt carries an absolute path so any repo's agent can read from it.
+ *
+ * Layout of one gripe, everything under it relative so the folder can be moved:
+ *
+ *   <inbox>/gripes/<slug>/    ← the `gripes/` level is skipped when the inbox *is* a
+ *     report.md                 folder named `gripes` — nobody wants gripes/gripes/
+ *     MANIFEST.txt
+ *     rec-01/                 one walkthrough part: frames/, grids/, transcript.txt,
+ *     rec-02/                 recording.json, walkthrough.webm
  */
 
 declare global {
@@ -103,13 +106,31 @@ export async function saveProjectPath(path: string): Promise<string> {
   return clean;
 }
 
+/**
+ * Point the inbox at a folder already called `gripes` and the `gripes/` level is
+ * dead weight — `G:\code\gripes` must write `G:\code\gripes\<slug>`, never
+ * `gripes\gripes\<slug>`. Every path builder and every writer applies this.
+ */
+function needsReportDir(name: string): boolean {
+  return name.toLowerCase() !== REPORT_DIR;
+}
+
+/** Last segment of a typed path: the inbox's own folder name. */
+function baseName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? '';
+}
+
 /** Best-known location of a session's folder: absolute when the user told us, folder-relative otherwise. */
 export function sessionFolder(
   session: Session | null | undefined,
   root: string,
   handle: FileSystemDirectoryHandle | null,
 ): string {
-  const parts = [REPORT_DIR, ...(session ? [session.slug] : [])];
+  const owner = root ? baseName(root) : (handle?.name ?? '');
+  const parts = [
+    ...(needsReportDir(owner) ? [REPORT_DIR] : []),
+    ...(session ? [session.slug] : []),
+  ];
   if (root) {
     const sep = root.includes('\\') ? '\\' : '/';
     return [root, ...parts].join(sep);
@@ -130,8 +151,14 @@ export async function requestPermission(handle: FileSystemDirectoryHandle): Prom
   return (await handle.requestPermission({ mode: 'readwrite' })) as DirPermission;
 }
 
+/** The inbox's `gripes/` dir — or the inbox itself when it is already one. */
+async function reportsDir(root: FileSystemDirectoryHandle) {
+  if (!needsReportDir(root.name)) return root;
+  return root.getDirectoryHandle(REPORT_DIR, { create: true });
+}
+
 async function sessionDir(root: FileSystemDirectoryHandle, session: Session) {
-  const reports = await root.getDirectoryHandle(REPORT_DIR, { create: true });
+  const reports = await reportsDir(root);
   return reports.getDirectoryHandle(session.slug, { create: true });
 }
 
@@ -142,91 +169,80 @@ async function writeFile(dir: FileSystemDirectoryHandle, name: string, data: Blo
   await writable.close();
 }
 
-export interface NoteImages {
-  full?: Blob;
-  crop?: Blob;
+/** The report has to describe the part being written, even if the caller's list predates it. */
+function withRecording(recordings: Recording[], recording: Recording): Recording[] {
+  const rest = recordings.filter((r) => r.id !== recording.id);
+  return [...rest, recording].sort((a, b) => a.index - b.index);
 }
 
-/**
- * Writes (or rewrites) the whole session folder. Cheap enough to run after every
- * note — the markdown is a few KB and images are skipped when they already exist.
- */
-export async function writeSession(
-  root: FileSystemDirectoryHandle,
+/** report.md + MANIFEST.txt — rewritten in full every time; they cost a few KB. */
+async function writeSummaries(
+  dir: FileSystemDirectoryHandle,
   session: Session,
-  notes: Note[],
-  images: Map<string, NoteImages>,
+  recordings: Recording[],
   folder?: string,
-): Promise<string[]> {
-  const dir = await sessionDir(root, session);
-  const wroteImagesFor: string[] = [];
-
-  for (const note of notes) {
-    const bundle = images.get(note.id);
-    if (!bundle) continue;
-    if (bundle.full) await writeFile(dir, note.fullFile, bundle.full);
-    if (bundle.crop && note.cropFile) await writeFile(dir, note.cropFile, bundle.crop);
-    wroteImagesFor.push(note.id);
-  }
-
-  await writeFile(dir, 'report.md', new Blob([buildReport(session, notes, folder)], { type: 'text/markdown' }));
-  await writeFile(
-    dir,
-    'notes.json',
-    new Blob([buildNotesJson(session, notes, folder)], { type: 'application/json' }),
-  );
-  return wroteImagesFor;
-}
-
-/**
- * Same idea for a recording: keyframes into frames/, then the readable copies —
- * report for the agent, transcript for grepping, json for tooling, manifest for
- * a model handed the folder cold — plus the contact sheets in grids/.
- */
-export async function writeRecordingSession(
-  root: FileSystemDirectoryHandle,
-  session: Session,
-  frames: Map<number, Blob>,
-  video: Blob | undefined,
-  grids: Blob[],
-  folder?: string,
-): Promise<void> {
-  const rec = session.recording;
-  if (!rec) return;
-  const dir = await sessionDir(root, session);
-  const framesDir = await dir.getDirectoryHandle('frames', { create: true });
-  for (const frame of rec.frames) {
-    const blob = frames.get(frame.index);
-    // frame.file is session-relative (frames/03-0125.jpg); the handle wants the leaf.
-    if (blob) await writeFile(framesDir, frame.file.split('/').pop()!, blob);
-  }
+) {
   await writeFile(
     dir,
     'report.md',
-    new Blob([buildRecordingReport(session, rec, folder)], { type: 'text/markdown' }),
-  );
-  await writeFile(dir, 'transcript.txt', new Blob([buildTranscriptTxt(rec)], { type: 'text/plain' }));
-  await writeFile(
-    dir,
-    'recording.json',
-    new Blob([buildRecordingJson(session, rec, folder)], { type: 'application/json' }),
+    new Blob([buildReport(session, recordings, folder)], { type: 'text/markdown' }),
   );
   await writeFile(
     dir,
     'MANIFEST.txt',
-    new Blob([buildManifestTxt(session, rec, folder)], { type: 'text/plain' }),
+    new Blob([buildManifestTxt(session, recordings, folder)], { type: 'text/plain' }),
   );
+  // The screenshot-notes feature is dead; old folders carry its ghosts, and a
+  // notes.json left lying there goes on describing them to the reading agent.
+  await dir.removeEntry('notes.json').catch(() => {});
+}
+
+/**
+ * Writes one walkthrough part, which owns a `rec-NN/` subtree: keyframes into
+ * frames/, contact sheets into grids/, then the readable copies — transcript for
+ * grepping, json for tooling, the raw webm for humans. The gripe's report and
+ * manifest are rewritten at the folder root, which is why the other recordings
+ * have to come with it.
+ */
+export async function writeRecording(
+  root: FileSystemDirectoryHandle,
+  session: Session,
+  recording: Recording,
+  frames: Map<number, Blob>,
+  video: Blob | undefined,
+  grids: Blob[],
+  recordings: Recording[],
+  folder?: string,
+): Promise<void> {
+  const rec = recording.meta;
+  const dir = await sessionDir(root, session);
+  const recDir = await dir.getDirectoryHandle(recDirName(recording.index), { create: true });
+
+  const framesDir = await recDir.getDirectoryHandle('frames', { create: true });
+  for (const frame of rec.frames) {
+    const blob = frames.get(frame.index);
+    // frame.file is rec-relative (frames/03-0125.jpg); the handle wants the leaf.
+    if (blob) await writeFile(framesDir, frame.file.split('/').pop()!, blob);
+  }
   if (grids.length) {
-    const gridsDir = await dir.getDirectoryHandle('grids', { create: true });
+    const gridsDir = await recDir.getDirectoryHandle('grids', { create: true });
     for (const [i, grid] of grids.entries()) {
       await writeFile(gridsDir, `grid_${String(i + 1).padStart(2, '0')}.jpg`, grid);
     }
   }
-  if (video) await writeFile(dir, rec.videoFile, video);
+  await writeFile(recDir, 'transcript.txt', new Blob([buildTranscriptTxt(rec)], { type: 'text/plain' }));
+  await writeFile(
+    recDir,
+    'recording.json',
+    new Blob([buildRecordingJson(session, recording, folder)], { type: 'application/json' }),
+  );
+  if (video) await writeFile(recDir, rec.videoFile, video);
+
+  await writeSummaries(dir, session, withRecording(recordings, recording), folder);
 }
 
 export async function deleteSessionFolder(root: FileSystemDirectoryHandle, session: Session) {
-  const reports = await root.getDirectoryHandle(REPORT_DIR, { create: true });
+  const reports = await reportsDir(root);
   await reports.removeEntry(session.slug, { recursive: true });
 }
 

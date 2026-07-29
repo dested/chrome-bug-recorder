@@ -10,7 +10,9 @@
   window.__gripeTap = true;
 
   const TAG = 'gripe:page-event';
+  const NAV_TAG = 'gripe:page-nav';
   const MAX_LEN = 2000;
+  const NAV_THROTTLE_MS = 500; // a router that fires three times per route change is still one navigation
 
   const send = (level, message, detail) => {
     try {
@@ -84,4 +86,35 @@
     this.addEventListener('error', () => send('network', `request failed — ${method} ${url}`));
     return originalOpen.call(this, method, url, ...rest);
   };
+
+  // A route change is not a PageEvent, so it rides its own channel — the content
+  // script turns it into a forced keyframe, nothing goes in the event buffer.
+  let lastNav = 0;
+  const sendNav = () => {
+    try {
+      const now = Date.now();
+      if (now - lastNav < NAV_THROTTLE_MS) return;
+      lastNav = now;
+      window.postMessage({ source: NAV_TAG, ts: now }, '*');
+    } catch {
+      /* never let telemetry break the page */
+    }
+  };
+
+  for (const name of ['pushState', 'replaceState']) {
+    try {
+      const original = history[name];
+      if (typeof original !== 'function') continue;
+      history[name] = function (...args) {
+        const result = original.apply(this, args);
+        sendNav();
+        return result;
+      };
+    } catch {
+      /* a frozen History is the app's business, not ours */
+    }
+  }
+
+  window.addEventListener('popstate', sendNav);
+  window.addEventListener('hashchange', sendNav);
 })();

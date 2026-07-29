@@ -1,7 +1,8 @@
 /**
- * Web Speech dictation. Chrome stops recognition on silence even in continuous
- * mode, so we transparently restart it while the composer is open — that's what
- * makes "just keep talking" work instead of dying after the first sentence.
+ * Web Speech dictation — the panel's recorder runs this for the whole length of
+ * a walkthrough. Chrome stops recognition on silence even in continuous mode, so
+ * we transparently restart it — that's what makes "just keep talking" work
+ * instead of dying after the first sentence.
  */
 
 interface SpeechAlternative {

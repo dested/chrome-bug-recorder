@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CaptureMode, Note, PageEvent, PointerSample, Session, Settings } from '../lib/types';
+import type { PageEvent, PointerSample, Recording, Session, Settings } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import { send } from '../lib/messages';
-import { blobs } from '../lib/db';
+import { blobs, getRecording, getSession, kv, listRecordings } from '../lib/db';
 import {
   checkPermission,
   displayPath,
@@ -14,36 +14,43 @@ import {
   requestPermission,
   saveProjectPath,
   sessionFolder,
-  writeRecordingSession,
-  writeSession,
+  writeRecording,
   type DirPermission,
-  type NoteImages,
 } from '../lib/fs';
 import {
   agentPrompt,
   buildManifestTxt,
-  buildNotesJson,
   buildRecordingJson,
-  buildRecordingReport,
   buildReport,
   buildTranscriptTxt,
 } from '../lib/markdown';
 import { blobBytes, makeZip, textBytes } from '../lib/zip';
-import { clockTime, dateTime, mmss, originOf, shortUrl } from '../lib/format';
+import { dateTime, mmss, originOf, recDirName } from '../lib/format';
+import { partSpans, totalMs } from '../lib/timeline';
 import { Recorder, type RecorderUpdate } from './recorder';
 import { makeGrids, type GridFrame } from './grids';
 import { transcribeRecording, type TranscribeProgress } from './transcribe';
+import Timeline from './Timeline';
 
 interface PanelState {
   sessions: Session[];
   activeSessionId: string | null;
-  notes: Note[];
+  /** The active gripe's parts, oldest first. They all land in one folder. */
+  recordings: Recording[];
   settings: Settings;
 }
 
-const EMPTY: PanelState = { sessions: [], activeSessionId: null, notes: [], settings: DEFAULT_SETTINGS };
+const EMPTY: PanelState = {
+  sessions: [],
+  activeSessionId: null,
+  recordings: [],
+  settings: DEFAULT_SETTINGS,
+};
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** The popped-out window is this same page; it just doesn't offer to pop itself out again. */
+const popped = new URLSearchParams(location.search).has('pop');
 
 export default function App() {
   const [state, setState] = useState<PanelState>(EMPTY);
@@ -53,27 +60,31 @@ export default function App() {
   // agent reading the report has to be able to find it.
   const [root, setRoot] = useState('');
   const [askRoot, setAskRoot] = useState(false);
-  const [thumbs, setThumbs] = useState<Record<string, string>>({});
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [shortcut, setShortcut] = useState('');
-  const [markShortcut, setMarkShortcut] = useState('');
   const [showSessions, setShowSessions] = useState(false);
+  /** The one collapsed row at the bottom. Nothing in here is needed to use the product. */
+  const [showSettings, setShowSettings] = useState(false);
+  /** Whether the recorded tab can host the on-page toolbar — chrome:// pages can't. */
+  const [pageToolbar, setPageToolbar] = useState(false);
   const [recUpdate, setRecUpdate] = useState<RecorderUpdate | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [expandedFrame, setExpandedFrame] = useState<number | null>(null);
-  const [frameUrls, setFrameUrls] = useState<Record<number, string>>({});
-  const [editingLine, setEditingLine] = useState<number | null>(null);
+  // Frames belong to a part now, so every frame key is `<recordingId>:<index>`.
+  const [frameUrls, setFrameUrls] = useState<Record<string, string>>({});
   const [whisper, setWhisper] = useState<TranscribeProgress | null>(null);
-  // Session id of the pass in flight — doubles as the "only one at a time" guard.
-  const whispering = useRef<string | null>(null);
-  const flushing = useRef(false);
+  // The queue, mirrored into state so each part can say `queued` / `transcribing…`.
+  // The old single-slot guard silently dropped the second part of a back-to-back pair.
+  const [whisperIds, setWhisperIds] = useState<string[]>([]);
+  const whisperQueue = useRef<string[]>([]);
+  const whisperRunning = useRef(false);
   const recorderRef = useRef<Recorder | null>(null);
   const flushingRec = useRef(false);
+  const recovering = useRef<Set<string>>(new Set());
   // The Stop button and Chrome's own "Stop sharing" bar can both fire.
   const stopGuard = useRef(false);
+  // The runtime listener is installed once, but the stop path closes over dir/perm/root
+  // (the late Whisper flush needs them). Keep the latest one behind a ref.
+  const stopRef = useRef<() => void>(() => {});
   const micTabOpened = useRef(false);
 
   const session = useMemo(
@@ -87,10 +98,17 @@ export default function App() {
     return next;
   }, []);
 
+  const say = useCallback((text: string) => {
+    setFlash(text);
+    window.setTimeout(() => setFlash(null), 1700);
+  }, []);
+
   useEffect(() => {
     void refresh();
     const listener = (message: { type?: string; origin?: string }) => {
       if (message?.type === 'state:changed') void refresh();
+      // The stop button on the page toolbar. The panel owns the recorder, so it acts.
+      if (message?.type === 'recording:stop') stopRef.current();
       const recorder = recorderRef.current;
       if (!recorder) return;
       // Telemetry and pointer both arrive from every tab; the recorder keeps only
@@ -101,6 +119,10 @@ export default function App() {
       if (message?.type === 'recording:pointer') {
         recorder.addPointer((message as { sample: PointerSample }).sample, message.origin);
       }
+      // A click or a route change in the recorded tab — dedup gets overruled.
+      if (message?.type === 'recording:force') {
+        recorder.force((message as { why: 'click' | 'nav' }).why, message.origin);
+      }
       if (message?.type === 'recording:mark') {
         recorder.mark();
         say('marked');
@@ -108,20 +130,11 @@ export default function App() {
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, [refresh]);
+  }, [refresh, say]);
 
   useEffect(() => {
     setName(session?.name ?? '');
   }, [session?.id, session?.name]);
-
-  // Ask Chrome what the shortcut actually is — it differs per OS and the user
-  // may have rebound it.
-  useEffect(() => {
-    void chrome.commands.getAll().then((commands) => {
-      setShortcut(commands.find((c) => c.name === 'arm-element')?.shortcut ?? '');
-      setMarkShortcut(commands.find((c) => c.name === 'mark-frame')?.shortcut ?? '');
-    });
-  }, []);
 
   // ── the gripe folder ──────────────────────────────────────────────────
   useEffect(() => {
@@ -167,6 +180,43 @@ export default function App() {
 
   const openInTab = () => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
 
+  /**
+   * The editor pops out as a strip along the bottom of the browser window the
+   * user is looking at — a timeline is a wide object, and chrome refuses to dock
+   * the side panel anywhere but the side. The worker re-pins it on every parent
+   * move/resize (strip:track), so it behaves like DevTools docked to the bottom.
+   */
+  const STRIP_H = 400;
+  const popOut = async () => {
+    // One strip. A second ⧉ press brings the existing one forward.
+    const dock = await kv.get<{ stripId: number }>('stripDock');
+    if (dock) {
+      const existing = await chrome.windows.get(dock.stripId).catch(() => null);
+      if (existing) {
+        await chrome.windows.update(dock.stripId, { focused: true });
+        return;
+      }
+    }
+    const win = await chrome.windows.getCurrent().catch(() => null);
+    const bounds =
+      win?.left !== undefined && win.width !== undefined && win.top !== undefined && win.height !== undefined
+        ? {
+            left: win.left,
+            top: win.top + win.height - STRIP_H,
+            width: win.width,
+            height: STRIP_H,
+          }
+        : { width: 1400, height: STRIP_H };
+    const strip = await chrome.windows.create({
+      url: chrome.runtime.getURL('sidepanel.html?pop=1'),
+      type: 'popup',
+      ...bounds,
+    });
+    if (strip?.id !== undefined && win?.id !== undefined) {
+      await send({ type: 'strip:track', stripId: strip.id, parentId: win.id });
+    }
+  };
+
   const reconnect = async () => {
     if (!dir) return;
     setPerm(await requestPermission(dir));
@@ -180,55 +230,37 @@ export default function App() {
   };
 
   // ── write-through to disk ─────────────────────────────────────────────
-  /** Writes one session's folder. Silent when nothing is connected — the notes stay pending. */
-  const flushNotes = useCallback(
-    async (target: Session, notes: Note[]) => {
-      if (!dir || perm !== 'granted') return;
-      const pending = notes.filter((n) => !n.written);
-      if (!pending.length) return;
-      try {
-        const images = new Map<string, NoteImages>();
-        for (const note of pending) {
-          images.set(note.id, {
-            full: await blobs.get(`${note.id}:full`),
-            crop: note.cropFile ? await blobs.get(`${note.id}:crop`) : undefined,
-          });
-        }
-        await writeSession(dir, target, notes, images, sessionFolder(target, root, dir));
-        await send({ type: 'note:written', ids: pending.map((n) => n.id) });
-        await refresh();
-      } catch (error) {
-        setFlash(`write failed: ${String(error).slice(0, 60)}`);
-        // A revoked handle is the usual cause — but not the only one, so ask.
-        setPerm(await checkPermission(dir));
-      }
-    },
-    [dir, perm, root, refresh],
-  );
-
+  /**
+   * Writes one part's rec-NN tree, plus the gripe-wide report and manifest around
+   * it. Silent when nothing is connected — the part stays pending.
+   */
   const flushRecording = useCallback(
-    async (target: Session) => {
-      const rec = target.recording;
-      if (!rec || !dir || perm !== 'granted') return;
+    async (target: Session, recording: Recording) => {
+      if (!dir || perm !== 'granted') return;
+      const meta = recording.meta;
       try {
         const frames = new Map<number, Blob>();
-        for (const f of rec.frames) {
-          const blob = await blobs.get(`${target.id}:frame:${f.index}`);
+        for (const f of meta.frames) {
+          const blob = await blobs.get(`${recording.id}:frame:${f.index}`);
           if (blob) frames.set(f.index, blob);
         }
-        const video = await blobs.get(`${target.id}:video`);
-        const gridFrames = rec.frames
+        const video = await blobs.get(`${recording.id}:video`);
+        const gridFrames = meta.frames
           .map((f) => ({ blob: frames.get(f.index), label: f.file.split('/').pop()! }))
           .filter((g): g is GridFrame => Boolean(g.blob));
-        await writeRecordingSession(
+        // Siblings, read fresh: this runs from paths that outlive a render.
+        const recordings = await listRecordings(target.id);
+        await writeRecording(
           dir,
           target,
+          recording,
           frames,
           video,
           await makeGrids(gridFrames),
+          recordings,
           sessionFolder(target, root, dir),
         );
-        await send({ type: 'recording:written', id: target.id, rev: rec.rev ?? 0 });
+        await send({ type: 'recording:written', id: recording.id, rev: meta.rev ?? 0 });
         await refresh();
       } catch (error) {
         setFlash(`write failed: ${String(error).slice(0, 60)}`);
@@ -238,116 +270,127 @@ export default function App() {
     [dir, perm, root, refresh],
   );
 
-  useEffect(() => {
-    if (!session || flushing.current) return;
-    if (!state.notes.some((n) => !n.written)) return;
-    flushing.current = true;
-    void flushNotes(session, state.notes).finally(() => {
-      flushing.current = false;
-    });
-  }, [session, state.notes, flushNotes]);
+  /**
+   * The same write, reached by id alone. The flush effects only ever see the
+   * active gripe, and a Whisper pass can land minutes after that gripe closed —
+   * so this pulls the part and its session straight out of IndexedDB.
+   */
+  const flushRecordingById = useCallback(
+    async (id: string) => {
+      const recording = await getRecording(id);
+      if (!recording || recording.state !== 'done' || recording.meta.written) return;
+      const target = await getSession(recording.sessionId);
+      if (!target) return;
+      for (let i = 0; i < 60 && flushingRec.current; i++) await wait(50);
+      flushingRec.current = true;
+      try {
+        await flushRecording(target, recording);
+      } finally {
+        flushingRec.current = false;
+      }
+    },
+    [flushRecording],
+  );
 
   useEffect(() => {
-    if (!session?.recording || session.recording.written || flushingRec.current) return;
+    if (!session || flushingRec.current) return;
+    // A part still recording has nothing final to write.
+    const pending = state.recordings.filter((r) => r.state === 'done' && !r.meta.written);
+    if (!pending.length) return;
     flushingRec.current = true;
-    void flushRecording(session).finally(() => {
+    // One at a time: they all rewrite the same report.md and MANIFEST.txt.
+    void (async () => {
+      for (const rec of pending) await flushRecording(session, rec);
+    })().finally(() => {
       flushingRec.current = false;
     });
-  }, [session, flushRecording]);
+  }, [session, state.recordings, flushRecording]);
 
-  // ── thumbnails ────────────────────────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const next: Record<string, string> = {};
-      for (const note of state.notes) {
-        if (thumbs[note.id]) continue;
-        const blob = (note.cropFile ? await blobs.get(`${note.id}:crop`) : null) ?? (await blobs.get(`${note.id}:full`));
-        if (blob) next[note.id] = URL.createObjectURL(blob);
-      }
-      if (!cancelled && Object.keys(next).length) setThumbs((prev) => ({ ...prev, ...next }));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [state.notes, thumbs]);
+  // ── transcription queue ───────────────────────────────────────────────
+  /**
+   * Runs after the part is already saved, never before: on success it swaps in
+   * the Whisper lines and flips `written` back to false so the folder is
+   * rewritten. Fail or close the panel and the Web Speech lines stand.
+   */
+  const runWhisper = useCallback(
+    async (id: string) => {
+      const video = await blobs.get(`${id}:video`);
+      if (!video) return;
+      const segments = await transcribeRecording(video, setWhisper);
+      if (!segments?.length) return;
+      await send({ type: 'recording:transcript', id, transcript: segments });
+      await refresh();
+      await flushRecordingById(id);
+    },
+    [refresh, flushRecordingById],
+  );
 
-  const [fullShots, setFullShots] = useState<Record<string, string>>({});
+  const enqueueWhisper = useCallback(
+    (id: string) => {
+      if (whisperQueue.current.includes(id)) return;
+      whisperQueue.current.push(id);
+      setWhisperIds([...whisperQueue.current]);
+      if (whisperRunning.current) return;
+      whisperRunning.current = true;
+      void (async () => {
+        try {
+          // One model in memory at a time — parts wait their turn, none are dropped.
+          while (whisperQueue.current.length) {
+            await runWhisper(whisperQueue.current[0]).catch(() => {});
+            whisperQueue.current.shift();
+            setWhisperIds([...whisperQueue.current]);
+            setWhisper(null);
+          }
+        } finally {
+          whisperRunning.current = false;
+        }
+      })();
+    },
+    [runWhisper],
+  );
+
+  // A part still marked `recording` belongs to a panel that died mid-ramble —
+  // unless it's the one recording right now. Reassemble it from its chunk blobs.
   useEffect(() => {
-    if (!expanded || fullShots[expanded]) return;
+    const live = recorderRef.current?.id;
+    const orphan = state.recordings.find(
+      (r) => r.state === 'recording' && r.id !== live && !recovering.current.has(r.id),
+    );
+    if (!orphan) return;
+    recovering.current.add(orphan.id);
     void (async () => {
-      const blob = await blobs.get(`${expanded}:full`);
-      if (blob) setFullShots((prev) => ({ ...prev, [expanded]: URL.createObjectURL(blob) }));
+      await send({ type: 'recording:recover', id: orphan.id });
+      await refresh();
+      enqueueWhisper(orphan.id);
+      say('recovered an interrupted recording');
     })();
-  }, [expanded, fullShots]);
+  }, [state.recordings, refresh, enqueueWhisper, say]);
 
   // ── recording frames ──────────────────────────────────────────────────
   useEffect(() => {
     setFrameUrls({});
-    setExpandedFrame(null);
   }, [session?.id]);
 
   useEffect(() => {
-    if (session?.kind !== 'recording' || !session.recording) return;
     let cancelled = false;
     void (async () => {
-      const next: Record<number, string> = {};
-      for (const f of session.recording!.frames) {
-        if (frameUrls[f.index]) continue;
-        const blob = await blobs.get(`${session.id}:frame:${f.index}`);
-        if (blob) next[f.index] = URL.createObjectURL(blob);
+      const next: Record<string, string> = {};
+      for (const rec of state.recordings) {
+        for (const f of rec.meta.frames) {
+          const key = `${rec.id}:${f.index}`;
+          if (frameUrls[key]) continue;
+          const blob = await blobs.get(`${rec.id}:frame:${f.index}`);
+          if (blob) next[key] = URL.createObjectURL(blob);
+        }
       }
       if (!cancelled && Object.keys(next).length) setFrameUrls((prev) => ({ ...prev, ...next }));
     })();
     return () => {
       cancelled = true;
     };
-  }, [session, frameUrls]);
+  }, [state.recordings, frameUrls]);
 
   // ── actions ───────────────────────────────────────────────────────────
-  const say = (text: string) => {
-    setFlash(text);
-    window.setTimeout(() => setFlash(null), 1700);
-  };
-
-  const arm = async (mode: CaptureMode) => {
-    const result = await send<{ ok: boolean }>({ type: 'arm', mode });
-    if (!result?.ok) say("can't record on this page");
-  };
-
-  /**
-   * Runs after the session is already saved, never before: on success it swaps in
-   * the Whisper lines and flips `written` back to false so the folder is rewritten.
-   * Fail or close the panel and the Web Speech lines stand.
-   */
-  const runWhisper = async (id: string) => {
-    if (whispering.current) return;
-    whispering.current = id;
-    try {
-      const video = await blobs.get(`${id}:video`);
-      if (!video) return;
-      const segments = await transcribeRecording(video, setWhisper);
-      if (segments?.length) {
-        await send({ type: 'recording:transcript', id, transcript: segments });
-        const next = await refresh();
-        // This lands minutes later — the gripe may already be closed, and the
-        // flush effect only ever looks at the active session. Write it by id.
-        const target = next.sessions.find((s) => s.id === id);
-        if (target?.recording && !target.recording.written && !flushingRec.current) {
-          flushingRec.current = true;
-          try {
-            await flushRecording(target);
-          } finally {
-            flushingRec.current = false;
-          }
-        }
-      }
-    } finally {
-      whispering.current = null;
-      setWhisper(null);
-    }
-  };
-
   const stopRecording = async () => {
     const r = recorderRef.current;
     if (!r || stopGuard.current) return;
@@ -356,14 +399,17 @@ export default function App() {
     try {
       await send({ type: 'recording:setActive', active: false });
       const meta = await r.stop();
-      await send({ type: 'recording:add', id: r.sessionId, name: 'Walkthrough', origin: r.scope, meta });
-      say('walkthrough saved');
+      await send({ type: 'recording:finish', id: r.id, meta });
       await refresh();
-      void runWhisper(r.sessionId).catch(() => {});
+      say('saved — on the timeline');
+      // Transcription is queued, not awaited: Record has to be pressable again
+      // right now — stopping and starting again is what parts are for.
+      enqueueWhisper(r.id);
     } finally {
       recorderRef.current = null;
       setRecUpdate(null);
       setStopping(false);
+      setPageToolbar(false);
       stopGuard.current = false;
     }
   };
@@ -396,54 +442,50 @@ export default function App() {
     // logs an error for the next five minutes is somebody else's noise.
     const tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
     const scope = originOf(tab?.url ?? '');
+    const id = crypto.randomUUID();
     const r = new Recorder(
       { onUpdate: setRecUpdate, onEnd: () => void stopRecording() },
       state.settings.lang,
       scope.startsWith('http') ? scope : '',
+      id,
     );
     try {
       await r.start();
     } catch {
+      // Refused the screen share: nothing was minted, so there's nothing to undo.
       say('screen share refused');
       return;
     }
+    // Claim the part *before* announcing it: `recording:start` broadcasts, and a
+    // refresh that lands before this ref is set reads the new part as an orphan.
     recorderRef.current = r;
-    await send({ type: 'recording:setActive', active: true });
+    try {
+      const started = await send<{ sessionId?: string }>({
+        type: 'recording:start',
+        id,
+        name: 'Walkthrough',
+        origin: r.scope,
+      });
+      if (!started?.sessionId) throw new Error('recording:start refused');
+    } catch {
+      recorderRef.current = null;
+      await r.cancel();
+      await send({ type: 'recording:discard', id }).catch(() => {});
+      setRecUpdate(null);
+      say("couldn't start the recording");
+      return;
+    }
+    // The toolbar only exists where a content script can run, and the HUD's
+    // sub-line must not point at a bar that isn't there.
+    setPageToolbar(Boolean(r.scope));
+    await refresh();
   };
 
-  const editShortcut = () => chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
-
-  /**
-   * Clicking a button in here leaves keyboard focus in the side panel, and Chrome
-   * gives us no way to hand it back to the page. So the panel listens for the
-   * same keys and relays them — whichever side has focus, E/R/D/P work.
-   */
+  // Every stop path — this button, Chrome's own "Stop sharing" bar, the page
+  // toolbar — lands in stopRecording, and the listener above needs today's copy.
   useEffect(() => {
-    const MODE_KEYS: Record<string, CaptureMode> = { e: 'element', r: 'region', d: 'draw', p: 'page' };
-    const onKey = (event: KeyboardEvent) => {
-      const el = event.target as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === 'Escape') {
-        void send({ type: 'disarm' });
-        return;
-      }
-      // While a walkthrough runs the panel is a recorder, not an armer.
-      if (recorderRef.current) {
-        if (event.key.toLowerCase() !== 'm') return;
-        event.preventDefault();
-        recorderRef.current.mark();
-        say('marked');
-        return;
-      }
-      const mode = MODE_KEYS[event.key.toLowerCase()];
-      if (!mode) return;
-      event.preventDefault();
-      void send<{ ok: boolean }>({ type: 'arm', mode });
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+    stopRef.current = () => void stopRecording();
+  });
 
   const switchSession = async (id: string) => {
     await send({ type: 'session:activate', id });
@@ -453,14 +495,18 @@ export default function App() {
 
   const copyPrompt = async () => {
     if (!session) return;
-    await navigator.clipboard.writeText(agentPrompt(session, sessionFolder(session, root, dir)));
+    // The count comes off the list, not the session: recCount only ever climbs
+    // (it names the next index), so deleting would leave the prompt lying.
+    await navigator.clipboard.writeText(
+      agentPrompt(session, sessionFolder(session, root, dir), state.recordings.length),
+    );
     say(root ? 'prompt copied — paste into Claude Code' : 'prompt copied — set the folder path for a clean handoff');
   };
 
   /**
    * Closing a gripe: get every byte on disk, hand over the prompt, then let go of
-   * the session. The next capture opens a fresh one in whatever project is
-   * connected then — usually a different repo, which is the whole point.
+   * the session. The next recording opens a fresh one — parts only ever accumulate
+   * in the open gripe, so this is the only way to start clean.
    *
    * The clipboard write goes first: it needs the click's user activation, and the
    * flush below can burn through it.
@@ -468,19 +514,19 @@ export default function App() {
   const finish = async () => {
     if (!session) return;
     const target = session;
+    const recordings = state.recordings;
     await navigator.clipboard
-      .writeText(agentPrompt(target, sessionFolder(target, root, dir)))
+      .writeText(agentPrompt(target, sessionFolder(target, root, dir), recordings.length))
       .catch(() => {});
-    // After the close there is no active session, and the flush effects only ever
-    // run for the active one — so anything still pending has to land right here.
-    for (let i = 0; i < 60 && (flushing.current || flushingRec.current); i++) await wait(50);
-    flushing.current = true;
+    // After the close there is no active session, and the flush effect only ever
+    // runs for the active one — so anything still pending has to land right here.
+    for (let i = 0; i < 60 && flushingRec.current; i++) await wait(50);
     flushingRec.current = true;
     try {
-      await flushNotes(target, state.notes);
-      if (target.recording && !target.recording.written) await flushRecording(target);
+      for (const rec of recordings) {
+        if (rec.state === 'done' && !rec.meta.written) await flushRecording(target, rec);
+      }
     } finally {
-      flushing.current = false;
       flushingRec.current = false;
     }
     await send({ type: 'session:close', id: target.id });
@@ -488,49 +534,44 @@ export default function App() {
     say(dir && perm === 'granted' ? 'gripe closed — prompt copied' : 'gripe closed — nothing written to disk');
   };
 
+  /** One zip for the whole gripe, laid out exactly like the folder on disk. */
   const exportZip = async () => {
     if (!session) return;
-    if (session.kind === 'recording' && session.recording) {
-      const rec = session.recording;
-      const files = [
-        { name: `${session.slug}/report.md`, data: textBytes(buildRecordingReport(session, rec)) },
-        { name: `${session.slug}/transcript.txt`, data: textBytes(buildTranscriptTxt(rec)) },
-        { name: `${session.slug}/recording.json`, data: textBytes(buildRecordingJson(session, rec)) },
-        { name: `${session.slug}/MANIFEST.txt`, data: textBytes(buildManifestTxt(session, rec)) },
-      ];
+    const base = session.slug;
+    const files = [
+      { name: `${base}/report.md`, data: textBytes(buildReport(session, state.recordings)) },
+      {
+        name: `${base}/MANIFEST.txt`,
+        data: textBytes(buildManifestTxt(session, state.recordings)),
+      },
+    ];
+    for (const rec of state.recordings) {
+      const meta = rec.meta;
+      const recDir = `${base}/${recDirName(rec.index)}`;
+      files.push({ name: `${recDir}/transcript.txt`, data: textBytes(buildTranscriptTxt(meta)) });
+      files.push({
+        name: `${recDir}/recording.json`,
+        data: textBytes(buildRecordingJson(session, rec)),
+      });
       const gridFrames: GridFrame[] = [];
-      for (const f of rec.frames) {
-        const blob = await blobs.get(`${session.id}:frame:${f.index}`);
+      for (const f of meta.frames) {
+        const blob = await blobs.get(`${rec.id}:frame:${f.index}`);
         if (!blob) continue;
-        files.push({ name: `${session.slug}/${f.file}`, data: await blobBytes(blob) });
+        // f.file is rec-relative (frames/03-0125.jpg) — the rec dir goes in front.
+        files.push({ name: `${recDir}/${f.file}`, data: await blobBytes(blob) });
         gridFrames.push({ blob, label: f.file.split('/').pop()! });
       }
-      const sheets = await makeGrids(gridFrames);
-      for (const [i, sheet] of sheets.entries()) {
+      for (const [i, sheet] of (await makeGrids(gridFrames)).entries()) {
         files.push({
-          name: `${session.slug}/grids/grid_${String(i + 1).padStart(2, '0')}.jpg`,
+          name: `${recDir}/grids/grid_${String(i + 1).padStart(2, '0')}.jpg`,
           data: await blobBytes(sheet),
         });
       }
-      const video = await blobs.get(`${session.id}:video`);
-      if (video) files.push({ name: `${session.slug}/${rec.videoFile}`, data: await blobBytes(video) });
-      const zipUrl = URL.createObjectURL(makeZip(files));
-      await chrome.downloads.download({ url: zipUrl, filename: `${session.slug}.zip`, saveAs: true });
-      say('zip exported');
-      return;
+      const video = await blobs.get(`${rec.id}:video`);
+      if (video) files.push({ name: `${recDir}/${meta.videoFile}`, data: await blobBytes(video) });
     }
-    const entries = [
-      { name: `${session.slug}/report.md`, data: textBytes(buildReport(session, state.notes)) },
-      { name: `${session.slug}/notes.json`, data: textBytes(buildNotesJson(session, state.notes)) },
-    ];
-    for (const note of state.notes) {
-      const full = await blobs.get(`${note.id}:full`);
-      if (full) entries.push({ name: `${session.slug}/${note.fullFile}`, data: await blobBytes(full) });
-      const crop = note.cropFile ? await blobs.get(`${note.id}:crop`) : undefined;
-      if (crop && note.cropFile) entries.push({ name: `${session.slug}/${note.cropFile}`, data: await blobBytes(crop) });
-    }
-    const url = URL.createObjectURL(makeZip(entries));
-    await chrome.downloads.download({ url, filename: `${session.slug}.zip`, saveAs: true });
+    const url = URL.createObjectURL(makeZip(files));
+    await chrome.downloads.download({ url, filename: `${base}.zip`, saveAs: true });
     say('zip exported');
   };
 
@@ -540,10 +581,101 @@ export default function App() {
     await refresh();
   };
 
+  /** `queued` / the live stage / nothing — one part's place in the Whisper queue. */
+  const whisperLabel = useCallback((id: string): string | null => {
+    if (whisperIds[0] !== id) return whisperIds.includes(id) ? 'queued' : null;
+    if (!whisper) return 'transcribing…';
+    if (whisper.stage === 'decode') return 'reading audio…';
+    if (whisper.stage === 'transcribe') return 'transcribing narration…';
+    if (whisper.stage === 'model') return 'loading model…';
+    return `fetching whisper model — ${Math.round(whisper.pct)}%`;
+  }, [whisper, whisperIds]);
+
+  /** recId → what the transcriber is doing. The timeline says it once, quietly. */
+  const busy = useMemo(
+    () =>
+      Object.fromEntries(
+        state.recordings
+          .map((r) => [r.id, whisperLabel(r.id)] as const)
+          .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+      ),
+    [state.recordings, whisperLabel],
+  );
+
   const folderReady = dir && perm === 'granted';
-  const written = state.notes.filter((n) => n.written).length;
-  const rec = session?.kind === 'recording' ? (session.recording ?? null) : null;
-  const hasContent = state.notes.length > 0 || Boolean(session?.recording);
+  /** Other gripes than this one — the only reason the history button exists. */
+  const others = state.sessions.filter((s) => s.id !== state.activeSessionId).length;
+  const parts = state.recordings.length;
+  const hasContent = parts > 0;
+  const onDisk = state.recordings.filter((r) => r.meta.written).length;
+  const allWritten = onDisk === parts;
+
+  const summary = [
+    // Duration, not a count of takes — the panel presents one timeline.
+    parts ? `${mmss(totalMs(partSpans(state.recordings)))} recorded` : '',
+    folderReady && hasContent ? (allWritten ? 'on disk' : `${onDisk}/${parts} on disk`) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  // The strip is the editor: one slim bar of chrome, and every remaining pixel
+  // belongs to the timeline. Capture lives in the side panel; this is where a
+  // ramble gets read, cut, and shipped.
+  if (popped) {
+    return (
+      <div className="app pop">
+        <header className="head">
+          <svg className="mark" viewBox="0 0 16 16" aria-hidden>
+            <circle cx="8" cy="8" r="2.6" fill="#ff5c39" />
+            <circle cx="8" cy="8" r="6.4" fill="none" stroke="#ff5c39" strokeWidth="2" />
+          </svg>
+          <input
+            className="popname"
+            value={name}
+            placeholder="Untitled gripe"
+            onChange={(e) => setName(e.target.value)}
+            onBlur={(e) => void renameSession(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          />
+          <span className="spacer" />
+          <span className="count">{summary}</span>
+          {dir && perm !== 'granted' && (
+            <button className="link hot" onClick={() => void reconnect()}>
+              reconnect
+            </button>
+          )}
+          {recUpdate ? (
+            <button className="stopmini" onClick={() => void stopRecording()} disabled={stopping}>
+              {stopping ? 'saving…' : `■ ${mmss(recUpdate.elapsedMs)}`}
+            </button>
+          ) : (
+            <button className="recmini" onClick={() => void startRecording()}>
+              <span className="dot" /> record
+            </button>
+          )}
+          <button className="primary" disabled={!hasContent} onClick={copyPrompt}>
+            Copy prompt
+          </button>
+          <button
+            className="ghost"
+            disabled={!hasContent}
+            title="Write it out, copy the prompt, and close this gripe"
+            onClick={() => void finish()}
+          >
+            done
+          </button>
+        </header>
+        <Timeline
+          recordings={state.recordings}
+          frameUrls={frameUrls}
+          busy={busy}
+          refresh={refresh}
+          say={say}
+        />
+        {flash && <div className="flash">{flash}</div>}
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -554,19 +686,10 @@ export default function App() {
         </svg>
         <span className="wordmark">Gripe</span>
         <span className="spacer" />
-        <span className="count">
-          {rec ? (
-            <>
-              {rec.frames.length} keyframe{rec.frames.length === 1 ? '' : 's'}
-              {rec.written && folderReady ? ' · on disk' : ''}
-            </>
-          ) : (
-            <>
-              {state.notes.length} note{state.notes.length === 1 ? '' : 's'}
-              {folderReady && state.notes.length ? ` · ${written} on disk` : ''}
-            </>
-          )}
-        </span>
+        <span className="count">{summary}</span>
+        <button className="popout" title="pop out the editor" onClick={() => void popOut()}>
+          ⧉
+        </button>
       </header>
 
       <div className="session">
@@ -578,48 +701,55 @@ export default function App() {
             onBlur={(e) => void renameSession(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
           />
-          <button
-            className={`chev ${showSessions ? 'open' : ''}`}
-            title="Switch session"
-            onClick={() => setShowSessions((v) => !v)}
-          >
-            {state.sessions.length > 1 ? `${state.sessions.length} ▾` : '▾'}
-          </button>
-        </div>
-        <div className="folder">
-          <span className={`status ${folderReady ? 'ok' : dir ? 'warn' : ''}`} />
-          <span className="path">
-            {!fsaSupported()
-              ? 'folder writing unavailable — use .zip'
-              : dir
-                ? displayPath(dir, session, root)
-                : 'no folder yet — nothing lands on disk'}
-          </span>
-          {dir && (
+          {others > 0 && (
             <button
-              className="link"
-              onClick={() => setAskRoot((v) => !v)}
-              title="The absolute path to the folder — your agent needs it to find the report"
+              className={`histbtn ${showSessions ? 'open' : ''}`}
+              onClick={() => setShowSessions((v) => !v)}
             >
-              {root ? 'path' : 'path?'}
-            </button>
-          )}
-          {dir && perm !== 'granted' && (
-            <button className="link" onClick={reconnect}>
-              Reconnect
-            </button>
-          )}
-          {dir && (
-            <button className="link" onClick={disconnect} title="Forget this folder — files on disk are kept">
-              ✕
-            </button>
-          )}
-          {!dir && fsaSupported() && (
-            <button className="link hot" onClick={pickerBlocked ? openInTab : connect}>
-              {pickerBlocked ? 'Open in tab →' : 'Choose folder'}
+              history · {others}
             </button>
           )}
         </div>
+
+        {!fsaSupported() ? (
+          <div className="inbox">
+            <span className="status" />
+            <span className="path">folder writing unavailable — use .zip</span>
+          </div>
+        ) : dir ? (
+          // One line, and everything you can do to the folder is behind it.
+          <div className="inbox">
+            <button
+              className="inbox-line"
+              onClick={() => setAskRoot((v) => !v)}
+              title={displayPath(dir, session, root)}
+            >
+              <span className={`status ${folderReady ? 'ok' : 'warn'}`} />
+              <span className="path">inbox · {root || dir.name}</span>
+              {!root && <span className="pathq">path?</span>}
+            </button>
+            {perm !== 'granted' && (
+              <button className="link hot" onClick={() => void reconnect()}>
+                reconnect
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="setup">
+            <div className="setup-row">
+              <span className="setup-title">gripes need somewhere to land</span>
+              <button
+                className="link hot"
+                onClick={pickerBlocked ? openInTab : () => void connect()}
+              >
+                {pickerBlocked ? 'Open in tab →' : 'Choose folder'}
+              </button>
+            </div>
+            <div className="setup-why">
+              pick or create one folder — every project's gripes go there
+            </div>
+          </div>
+        )}
       </div>
 
       {askRoot && dir && (
@@ -633,9 +763,16 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
           />
           <div className="why">
-            Chrome won't tell an extension where your folder is. Paste it once and every report
-            opens with a path your agent can use.
+            chrome won't tell us where this folder lives. paste its full path once — every prompt
+            will carry it so your agent never hunts.
           </div>
+          <button
+            className="forget"
+            onClick={() => void disconnect()}
+            title="Files already on disk are kept"
+          >
+            forget this folder
+          </button>
         </div>
       )}
 
@@ -653,10 +790,7 @@ export default function App() {
                 {s.closed && <span className="stag">closed</span>}
               </div>
               <div className="smeta">
-                {s.kind === 'recording'
-                  ? `${s.recording?.frames.length ?? 0} frames`
-                  : `${s.noteCount} note${s.noteCount === 1 ? '' : 's'}`}{' '}
-                · {dateTime(s.createdAt)}
+                {s.recCount} recording{s.recCount === 1 ? '' : 's'} · {dateTime(s.createdAt)}
               </div>
               <button
                 className="kill"
@@ -675,274 +809,92 @@ export default function App() {
       )}
 
       {recUpdate ? (
-        <div className="controls">
-          <div className="rec">
-            <span className="rec-dot" />
-            <span className="rec-time">{mmss(recUpdate.elapsedMs)}</span>
-            <span className="rec-meta">
-              {recUpdate.frameCount} frames · {recUpdate.segmentCount} lines
-              {recUpdate.markCount ? ` · ${recUpdate.markCount} marked` : ''}
-            </span>
-            <button className="rec-stop" onClick={() => void stopRecording()} disabled={stopping}>
-              {stopping ? 'saving…' : 'Stop'}
-            </button>
-          </div>
-          {recUpdate.micState === 'denied' ? (
-            <button
-              className="rec-interim warn"
-              title="Open the permission page in a tab"
-              onClick={() => void chrome.tabs.create({ url: chrome.runtime.getURL('micperm.html') })}
-            >
-              microphone blocked — no narration this time · fix it
-            </button>
-          ) : (
-            <div className="rec-interim">
-              {recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
-            </div>
-          )}
-          <div className="rec-hint">
-            <kbd>{markShortcut || 'Alt+Shift+M'}</kbd> marks the frame you're talking about
-          </div>
-        </div>
-      ) : (
-        <div className="controls">
-          <button className="arm" onClick={() => void arm('element')}>
-            Point &amp; record {shortcut && <kbd>{shortcut}</kbd>}
-          </button>
-          <div className="modes">
-            <button className="mode" onClick={() => void arm('region')}>
-              Region
-            </button>
-            <button className="mode" onClick={() => void arm('draw')}>
-              Draw
-            </button>
-            <button className="mode" onClick={() => void arm('page')}>
-              Page
-            </button>
-            <button className="mode" onClick={() => void startRecording()}>
-              Record
-            </button>
-          </div>
-          <button className="hintline" onClick={editShortcut}>
-            {shortcut ? `${shortcut} works anywhere · change it` : 'no shortcut bound — set one'}
-          </button>
-        </div>
-      )}
-
-      {rec ? (
-        <div className="notes">
-          <div className="rec-sum">
-            {mmss(rec.durationMs)} · {rec.frames.length} keyframes · {rec.transcript.length} spoken lines
-            {rec.events.length ? ` · ${rec.events.length} errors` : ''}
-          </div>
-          {whisper && whispering.current === session!.id && (
-            <div className="rec-whisper">
-              {whisper.stage === 'decode'
-                ? 'reading audio…'
-                : whisper.stage === 'transcribe'
-                  ? 'transcribing narration…'
-                  : whisper.stage === 'model'
-                    ? 'loading model…'
-                    : `fetching whisper model — ${Math.round(whisper.pct)}%`}
-            </div>
-          )}
-          <div className="rec-frames">
-            {rec.frames.map((f) => (
-              <div
-                key={f.index}
-                className="rframe"
-                onClick={() => setExpandedFrame(expandedFrame === f.index ? null : f.index)}
-              >
-                {frameUrls[f.index] && <img src={frameUrls[f.index]} alt="" />}
-                <span className={`rtime ${f.reason === 'mark' ? 'marked' : ''}`}>
-                  {f.reason === 'mark' ? '★ ' : ''}
-                  {mmss(f.t)}
-                </span>
-                <button
-                  className="kill"
-                  title="Delete frame (file on disk is kept)"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (expandedFrame === f.index) setExpandedFrame(null);
-                    await send({ type: 'recording:frame:delete', id: session!.id, index: f.index });
-                    await refresh();
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-          {expandedFrame !== null && frameUrls[expandedFrame] && (
-            <div className="shot">
-              <img src={frameUrls[expandedFrame]} alt="" onClick={() => setExpandedFrame(null)} />
-            </div>
-          )}
-          {rec.transcript.length > 0 && !rec.reviewed && !whispering.current && (
-            <div className="rec-check">
-              <span>
-                <b>Read this back before you hand it off.</b> Speech recognition eats the words that
-                matter — a number or a noun it guesses wrong sends your agent to the wrong file.
-                Click any line to fix it.
+        <div className="controls live">
+          <div className="hud">
+            <div className="live-row">
+              <span className="dot" />
+              <span className="clock">{mmss(recUpdate.elapsedMs)}</span>
+              <span className="stat">
+                {recUpdate.frameCount} frames · {recUpdate.segmentCount} lines ·{' '}
+                {recUpdate.markCount} marked
               </span>
-              <button
-                onClick={async () => {
-                  await send({ type: 'recording:reviewed', id: session!.id });
-                  await refresh();
-                  say('transcript confirmed');
-                }}
-              >
-                looks right
+              <button className="stop" onClick={() => void stopRecording()} disabled={stopping}>
+                {stopping ? 'saving…' : '■ Stop'}
               </button>
             </div>
-          )}
-          {rec.transcript.length > 0 && (
-            <div className="rec-script">
-              {rec.transcript.map((s, i) => (
-                <div className="line" key={i}>
-                  <span className="at">{mmss(s.t)}</span>
-                  {editingLine === i ? (
-                    <input
-                      autoFocus
-                      defaultValue={s.text}
-                      onBlur={async (e) => {
-                        setEditingLine(null);
-                        if (e.target.value !== s.text) {
-                          await send({
-                            type: 'recording:line:update',
-                            id: session!.id,
-                            index: i,
-                            text: e.target.value,
-                          });
-                          await refresh();
-                        }
-                      }}
-                      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-                    />
-                  ) : (
-                    <span className="txt" onClick={() => setEditingLine(i)}>
-                      {s.text}
-                    </span>
-                  )}
-                  <button
-                    className="kill"
-                    title="Delete line"
-                    onClick={async () => {
-                      await send({ type: 'recording:line:delete', id: session!.id, index: i });
-                      await refresh();
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+            {recUpdate.micState === 'denied' ? (
+              <button
+                className="interim warn"
+                title="Open the permission page in a tab"
+                onClick={() =>
+                  void chrome.tabs.create({ url: chrome.runtime.getURL('micperm.html') })
+                }
+              >
+                microphone blocked — no narration this time · fix it
+              </button>
+            ) : (
+              <div className="interim">
+                {recUpdate.interim || (recUpdate.micState === 'listening' ? 'listening…' : '')}
+              </div>
+            )}
+            {pageToolbar && (
+              <div className="sub">draw and stop from the little bar on the page</div>
+            )}
+          </div>
         </div>
       ) : (
-        <div className="notes">
-          {!state.notes.length && (
-            <div className="empty">
-              Nothing recorded yet.
-              <br />
-              Hit <b>{shortcut || 'the shortcut'}</b> on the page,
-              <br />
-              click what's wrong, and just say it.
-            </div>
-          )}
-          {state.notes.map((note) => (
-            <div key={note.id}>
-              <div className="note">
-                {thumbs[note.id] && (
-                  <img
-                    className="thumb"
-                    src={thumbs[note.id]}
-                    alt=""
-                    onClick={() => setExpanded(expanded === note.id ? null : note.id)}
-                  />
-                )}
-                <span className="idx">{note.index}</span>
-                <div className="body">
-                  {editing === note.id ? (
-                    <textarea
-                      autoFocus
-                      defaultValue={note.text}
-                      rows={3}
-                      onBlur={async (e) => {
-                        setEditing(null);
-                        if (e.target.value !== note.text) {
-                          await send({ type: 'note:update', id: note.id, text: e.target.value });
-                          await refresh();
-                        }
-                      }}
-                    />
-                  ) : (
-                    <div className={`text ${note.text ? '' : 'blank'}`} onClick={() => setEditing(note.id)}>
-                      {note.text || 'no comment — screenshot only'}
-                    </div>
-                  )}
-                  <div className="meta">
-                    {note.target && <span className="sel">{note.target.selector}</span>}
-                    <span>{shortUrl(note.url)}</span>
-                    <span>· {clockTime(note.createdAt)}</span>
-                  </div>
-                  {note.events.length > 0 && (
-                    <div className="errs">
-                      {note.events.length} console/network error{note.events.length === 1 ? '' : 's'} captured
-                    </div>
-                  )}
-                </div>
-                <button
-                  className="kill"
-                  title="Delete note"
-                  onClick={async () => {
-                    await send({ type: 'note:delete', id: note.id });
-                    await refresh();
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-              {expanded === note.id && fullShots[note.id] && (
-                <div className="shot">
-                  <img src={fullShots[note.id]} alt="" onClick={() => setExpanded(null)} />
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="controls">
+          <button className="hero" onClick={() => void startRecording()}>
+            <span className="dot" />
+            Record
+          </button>
         </div>
       )}
 
-      <div className="toggles">
-        {(
-          [
-            ['autoDictate', 'auto-mic'],
-            ['autoSend', 'auto-send'],
-            ['spotlight', 'spotlight'],
-            ['chain', 'stay armed'],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            className={`toggle ${state.settings[key] ? 'on' : ''}`}
-            onClick={async () => {
-              await send({ type: 'settings:set', patch: { [key]: !state.settings[key] } });
-              await refresh();
-            }}
-          >
-            <i />
-            {label}
-          </button>
-        ))}
+      <Timeline
+        recordings={state.recordings}
+        frameUrls={frameUrls}
+        busy={busy}
+        refresh={refresh}
+        say={say}
+      />
+
+      <div className="settings">
+        <button
+          className={`settings-row ${showSettings ? 'open' : ''}`}
+          onClick={() => setShowSettings((v) => !v)}
+        >
+          settings
+        </button>
+        {showSettings && (
+          <div className="toggles">
+            {([['drawStart', 'recordings start ready to draw']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                className={`toggle ${state.settings[key] ? 'on' : ''}`}
+                onClick={async () => {
+                  await send({ type: 'settings:set', patch: { [key]: !state.settings[key] } });
+                  await refresh();
+                }}
+              >
+                <i />
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="foot">
         <button className="primary" disabled={!hasContent} onClick={copyPrompt}>
           Copy prompt for Claude Code
         </button>
-        <button className="ghost" disabled={!hasContent} onClick={exportZip} title="Download as .zip">
-          .zip
-        </button>
+        {/* The escape hatch, and only when there's no folder to write into. */}
+        {(!folderReady || !fsaSupported()) && (
+          <button className="ghost" disabled={!hasContent} onClick={exportZip} title="Download as .zip">
+            .zip
+          </button>
+        )}
         <button
           className="ghost"
           disabled={!hasContent}

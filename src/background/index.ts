@@ -1,34 +1,73 @@
 import type { ContentCommand, Request } from '../lib/messages';
-import type { CaptureMode, Note, NoteDraft, Session, Settings } from '../lib/types';
+import type { RecordingMeta, Session, Settings, TimelineMove, TimelineRef } from '../lib/types';
 import { DEFAULT_SETTINGS } from '../lib/types';
 import {
   blobs,
-  dataUrlToBlob,
-  deleteNote,
+  deleteRecording,
   deleteSession,
-  getNote,
+  getRecording,
   getSession,
   kv,
-  listNotes,
+  listRecordings,
   listSessions,
-  putNote,
+  putRecording,
   putSession,
 } from '../lib/db';
-import { noteFileBase, originOf, slugify, stamp } from '../lib/format';
+import { slugify, stamp } from '../lib/format';
 
 /**
  * The service worker is the only component that's always alive when it needs to
- * be, so it owns: hotkeys, tab capture (the API is background-only), and the
- * write path into IndexedDB. The side panel is a view over that state — notes
- * recorded while it's closed are still captured and flushed to disk later.
+ * be, so it owns: hotkeys, the on-page toolbar's reach into every tab, and the
+ * write path into IndexedDB. The side panel is a view over that state — a part
+ * recorded while it's closed is still captured and flushed to disk later.
  */
 
 const ACTIVE_SESSION = 'activeSessionId';
 const SETTINGS = 'settings';
 const RECORDING_ACTIVE = 'recordingActive';
+/** Origin of the tab being recorded — scopes the on-page toolbar to that app's tabs. */
+const RECORDING_ORIGIN = 'recordingOrigin';
+/** kv: { stripId, parentId } — the popped editor strip and the window it's pinned under. */
+const STRIP_DOCK = 'stripDock';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+});
+
+/**
+ * Chrome won't dock a window, so the worker fakes it: whenever the browser
+ * window under the strip moves or resizes, the strip is re-pinned to its bottom
+ * edge. The strip's own height is kept — resizing it taller is the user's call.
+ */
+chrome.windows.onBoundsChanged.addListener(async (win) => {
+  const dock = await kv.get<{ stripId: number; parentId: number }>(STRIP_DOCK);
+  if (!dock || win.id !== dock.parentId) return;
+  const strip = await chrome.windows.get(dock.stripId).catch(() => null);
+  if (!strip) {
+    await kv.delete(STRIP_DOCK);
+    return;
+  }
+  const height = strip.height ?? 400;
+  await chrome.windows
+    .update(dock.stripId, {
+      left: win.left ?? 0,
+      width: win.width ?? 1200,
+      top: (win.top ?? 0) + (win.height ?? 0) - height,
+      height,
+    })
+    .catch(() => {});
+});
+
+// The strip has no life of its own: parent closes, strip closes.
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  const dock = await kv.get<{ stripId: number; parentId: number }>(STRIP_DOCK);
+  if (!dock) return;
+  if (windowId === dock.parentId) {
+    await chrome.windows.remove(dock.stripId).catch(() => {});
+    await kv.delete(STRIP_DOCK);
+  } else if (windowId === dock.stripId) {
+    await kv.delete(STRIP_DOCK);
+  }
 });
 
 async function getSettings(): Promise<Settings> {
@@ -41,9 +80,10 @@ async function broadcast() {
   });
 }
 
+/** The toolbar icon is the only surface a closed panel has: it says a gripe is open and how full it is. */
 async function updateBadge() {
   const session = await activeSession();
-  const count = session?.noteCount ?? 0;
+  const count = session?.recCount ?? 0;
   await chrome.action.setBadgeText({ text: count ? String(count) : '' });
   await chrome.action.setBadgeBackgroundColor({ color: '#ff5c39' });
 }
@@ -78,52 +118,57 @@ async function createSession(name: string, origin: string): Promise<Session> {
     createdAt: now,
     updatedAt: now,
     origin,
-    noteCount: 0,
+    recCount: 0,
   };
   await putSession(session);
   await kv.set(ACTIVE_SESSION, session.id);
   return session;
 }
 
-async function ensureSession(draft: NoteDraft): Promise<Session> {
+/** Every part lands in the open gripe; only `done` starts a new one. */
+async function ensureSession(name: string, origin: string): Promise<Session> {
   const current = await activeSession();
   if (current && !current.closed) return current;
-  const name = draft.title?.trim() || originOf(draft.url);
-  return createSession(name, originOf(draft.url));
+  return createSession(name, origin);
 }
 
-async function addNote(draft: NoteDraft): Promise<Note> {
-  const session = await ensureSession(draft);
-  const index = session.noteCount + 1;
-  const base = noteFileBase(index);
-  const id = crypto.randomUUID();
+/**
+ * Everything still in this gripe now describes a folder that is out of date, so
+ * make the flush effects run again. Deleting is the sharp case: nothing about the
+ * deletion is on disk, and report.md / MANIFEST.txt go on describing it forever
+ * unless something left behind is marked unwritten.
+ */
+async function markSessionStale(sessionId: string): Promise<void> {
+  for (const rec of await listRecordings(sessionId)) {
+    await putRecording({
+      ...rec,
+      meta: { ...rec.meta, rev: (rec.meta.rev ?? 0) + 1, written: false },
+    });
+  }
+}
 
-  const note: Note = {
-    id,
-    sessionId: session.id,
-    index,
-    createdAt: Date.now(),
-    text: draft.text.trim(),
-    mode: draft.mode,
-    url: draft.url,
-    title: draft.title,
-    viewport: draft.viewport,
-    target: draft.target,
-    region: draft.region,
-    strokes: draft.strokes,
-    events: draft.events,
-    fullFile: `${base}-full.png`,
-    cropFile: draft.cropImage ? `${base}-target.png` : undefined,
+/**
+ * Did the caller see this recording as it is now? A Whisper pass replaces the
+ * whole transcript array, so a positional line edit built against the old one
+ * would land on the wrong words. No rev supplied = no claim made = go ahead.
+ */
+function freshFor(revs: Record<string, number> | undefined, id: string, rev: number | undefined): boolean {
+  const seen = revs?.[id];
+  return seen === undefined || seen === (rev ?? 0);
+}
+
+/** What a part starts life with — `recording:progress` overwrites it wholesale. */
+function emptyMeta(now: number): RecordingMeta {
+  return {
+    startedAt: now,
+    durationMs: 0,
+    sampled: 0,
+    frames: [],
+    transcript: [],
+    events: [],
+    videoFile: 'walkthrough.webm',
     written: false,
   };
-
-  await blobs.set(`${id}:full`, await dataUrlToBlob(draft.fullImage));
-  if (draft.cropImage) await blobs.set(`${id}:crop`, await dataUrlToBlob(draft.cropImage));
-  await putNote(note);
-  await putSession({ ...session, noteCount: index, updatedAt: note.createdAt });
-  await updateBadge();
-  await broadcast();
-  return note;
 }
 
 async function tellTab(tabId: number, command: ContentCommand): Promise<boolean> {
@@ -146,51 +191,45 @@ async function ensureContentScript(tabId: number): Promise<boolean> {
   }
 }
 
-async function arm(mode: CaptureMode, tabId?: number) {
-  const id =
-    tabId ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id ?? undefined;
+/** The ink layer lives in the page, so the hotkey has to be relayed to the tab. */
+async function drawLive() {
+  const id = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
   if (id === undefined) return false;
   if (!(await ensureContentScript(id))) return false;
-  const settings = await getSettings();
-  return tellTab(id, { type: 'arm', mode, settings });
+  return tellTab(id, { type: 'draw:toggle' });
 }
 
-async function setRecordingActive(active: boolean) {
+async function setRecordingActive(active: boolean, origin = '') {
   await kv.set(RECORDING_ACTIVE, active);
+  await kv.set(RECORDING_ORIGIN, active ? origin : '');
+  const { drawStart } = await getSettings();
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
-    if (tab.id !== undefined) void tellTab(tab.id, { type: 'recording', active });
+    if (tab.id !== undefined) void tellTab(tab.id, { type: 'recording', active, origin, drawStart });
   }
 }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
-  void kv.get<boolean>(RECORDING_ACTIVE).then((active) => {
-    if (active) void tellTab(tabId, { type: 'recording', active: true });
-  });
+  void (async () => {
+    if (!(await kv.get<boolean>(RECORDING_ACTIVE))) return;
+    const origin = (await kv.get<string>(RECORDING_ORIGIN)) ?? '';
+    const { drawStart } = await getSettings();
+    void tellTab(tabId, { type: 'recording', active: true, origin, drawStart });
+  })();
 });
 
 chrome.commands.onCommand.addListener((command) => {
-  if (command === 'arm-element') void arm('element');
-  if (command === 'arm-page') void arm('page');
+  if (command === 'draw-live') void drawLive();
   // The recorder lives in the panel; a command only reaches the worker, so relay it.
   if (command === 'mark-frame') {
     chrome.runtime.sendMessage({ type: 'recording:mark' }).catch(() => {});
   }
 });
 
-chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: Request, _sender, sendResponse) => {
   (async () => {
     switch (message.type) {
-      case 'capture:visible': {
-        const windowId = sender.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-        const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
-        return { dataUrl };
-      }
-      case 'note:add': {
-        const note = await addNote(message.draft);
-        return { ok: true, noteId: note.id, index: note.index, file: note.fullFile };
-      }
       case 'settings:get':
         return getSettings();
       case 'settings:set': {
@@ -218,7 +257,7 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         const session = await getSession(message.id);
         if (!session) return { ok: false };
         await putSession({ ...session, closed: true, updatedAt: Date.now() });
-        // No new active session: the next capture mints one, in whatever project
+        // No new active session: the next recording mints one, in whatever project
         // is connected then. An empty panel is the honest state after a handoff.
         if ((await kv.get<string>(ACTIVE_SESSION)) === message.id) await kv.set(ACTIVE_SESSION, null);
         await updateBadge();
@@ -235,38 +274,8 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
       case 'session:rewrite': {
         const session = await getSession(message.id);
         if (!session) return { ok: false };
-        for (const note of await listNotes(message.id)) {
-          if (note.written) await putNote({ ...note, written: false });
-        }
-        if (session.recording) {
-          await putSession({
-            ...session,
-            recording: {
-              ...session.recording,
-              rev: (session.recording.rev ?? 0) + 1,
-              written: false,
-            },
-          });
-        }
+        await markSessionStale(message.id);
         await broadcast();
-        return { ok: true };
-      }
-      case 'note:update': {
-        const note = await getNote(message.id);
-        if (note) await putNote({ ...note, text: message.text, written: false });
-        await broadcast();
-        return { ok: true };
-      }
-      case 'note:delete': {
-        await deleteNote(message.id);
-        await broadcast();
-        return { ok: true };
-      }
-      case 'note:written': {
-        for (const id of message.ids) {
-          const note = await getNote(id);
-          if (note) await putNote({ ...note, written: true });
-        }
         return { ok: true };
       }
       case 'state:get': {
@@ -275,63 +284,113 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         return {
           sessions,
           activeSessionId: current?.id ?? null,
-          notes: current ? await listNotes(current.id) : [],
+          recordings: current ? await listRecordings(current.id) : [],
           settings: await getSettings(),
         };
       }
-      case 'arm':
-        return { ok: await arm(message.mode, message.tabId) };
-      case 'disarm': {
-        const tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
-        if (tab?.id !== undefined) await tellTab(tab.id, { type: 'disarm' });
-        return { ok: true };
-      }
-      case 'recording:add': {
+      case 'recording:start': {
         const now = Date.now();
-        const label = message.name.trim() || 'Walkthrough';
-        const session: Session = {
+        const session = await ensureSession(message.name.trim() || 'Walkthrough', message.origin);
+        const index = session.recCount + 1;
+        await putRecording({
           id: message.id,
-          name: label,
-          slug: await uniqueSlug(label, now),
-          createdAt: message.meta.startedAt,
-          updatedAt: now,
-          origin: message.origin,
-          noteCount: 0,
-          kind: 'recording',
-          recording: message.meta,
-        };
-        await putSession(session);
+          sessionId: session.id,
+          index,
+          createdAt: now,
+          state: 'recording',
+          mime: '',
+          chunks: 0,
+          meta: emptyMeta(now),
+        });
+        await putSession({ ...session, recCount: index, updatedAt: now });
         await kv.set(ACTIVE_SESSION, session.id);
+        await setRecordingActive(true, message.origin);
         await updateBadge();
         await broadcast();
-        return session;
+        return { sessionId: session.id, index };
+      }
+      case 'recording:progress': {
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        // No broadcast — this lands every couple of seconds and the panel already
+        // holds the live meta in memory. It's here so a dead panel loses nothing.
+        await putRecording({
+          ...rec,
+          meta: message.meta,
+          mime: message.mime,
+          chunks: message.chunks,
+        });
+        return { ok: true };
+      }
+      case 'recording:finish': {
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        // The chunk blobs are gone by now — finish() assembled the video from them.
+        await putRecording({ ...rec, state: 'done', chunks: 0, meta: message.meta });
+        await setRecordingActive(false);
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:discard': {
+        // The part index is spent either way; parts never renumber.
+        await deleteRecording(message.id);
+        await broadcast();
+        return { ok: true };
+      }
+      case 'recording:recover': {
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        const parts: Blob[] = [];
+        for (let n = 1; n <= rec.chunks; n++) {
+          const chunk = await blobs.get(`${message.id}:chunk:${n}`);
+          if (chunk) parts.push(chunk);
+        }
+        if (parts.length) {
+          await blobs.set(`${message.id}:video`, new Blob(parts, { type: rec.mime }));
+        }
+        for (let n = 1; n <= rec.chunks; n++) await blobs.delete(`${message.id}:chunk:${n}`);
+        // The last kept frame is the only clock we have — the panel that knew the
+        // real duration died before it could tell us.
+        const last = rec.meta.frames[rec.meta.frames.length - 1];
+        await putRecording({
+          ...rec,
+          state: 'done',
+          interrupted: true,
+          chunks: 0,
+          meta: {
+            ...rec.meta,
+            durationMs: last ? last.t : rec.meta.durationMs,
+            written: false,
+          },
+        });
+        await broadcast();
+        return { ok: true };
       }
       case 'recording:setActive': {
         await setRecordingActive(message.active);
         return { ok: true };
       }
       case 'recording:written': {
-        const session = await getSession(message.id);
+        const rec = await getRecording(message.id);
         // Only mark written if nothing mutated since that flush started — a stale
         // rev means the disk holds older content and the effect must run again.
-        if (session?.recording && (session.recording.rev ?? 0) === message.rev) {
-          await putSession({ ...session, recording: { ...session.recording, written: true } });
+        if (rec && (rec.meta.rev ?? 0) === message.rev) {
+          await putRecording({ ...rec, meta: { ...rec.meta, written: true } });
         }
         await broadcast();
         return { ok: true };
       }
       case 'recording:frame:delete': {
-        const session = await getSession(message.id);
-        if (!session?.recording) return { ok: false };
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
         await blobs.delete(`${message.id}:frame:${message.index}`);
-        const rec = session.recording;
-        // Frames are not renumbered — same rule as notes; the file on disk is kept.
-        await putSession({
-          ...session,
-          recording: {
-            ...rec,
-            frames: rec.frames.filter((f) => f.index !== message.index),
-            rev: (rec.rev ?? 0) + 1,
+        // Frames are never renumbered, and the file on disk is kept.
+        await putRecording({
+          ...rec,
+          meta: {
+            ...rec.meta,
+            frames: rec.meta.frames.filter((f) => f.index !== message.index),
+            rev: (rec.meta.rev ?? 0) + 1,
             written: false,
           },
         });
@@ -339,49 +398,133 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         return { ok: true };
       }
       case 'recording:line:update': {
-        const session = await getSession(message.id);
-        if (!session?.recording) return { ok: false };
-        const rec = session.recording;
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        // The caller aimed at position `index` in a transcript that has since been
+        // replaced — editing that slot now would edit somebody else's words.
+        if (message.rev !== undefined && message.rev !== (rec.meta.rev ?? 0)) {
+          return { ok: true, stale: true };
+        }
         const text = message.text.trim();
         const transcript = text
-          ? rec.transcript.map((s, i) => (i === message.index ? { ...s, text } : s))
-          : rec.transcript.filter((_, i) => i !== message.index); // emptied = deleted
-        await putSession({
-          ...session,
-          recording: { ...rec, transcript, rev: (rec.rev ?? 0) + 1, written: false },
+          ? rec.meta.transcript.map((s, i) => (i === message.index ? { ...s, text } : s))
+          : rec.meta.transcript.filter((_, i) => i !== message.index); // emptied = deleted
+        await putRecording({
+          ...rec,
+          meta: { ...rec.meta, transcript, rev: (rec.meta.rev ?? 0) + 1, written: false },
         });
         await broadcast();
         return { ok: true };
       }
       case 'recording:line:delete': {
-        const session = await getSession(message.id);
-        if (!session?.recording) return { ok: false };
-        const rec = session.recording;
-        await putSession({
-          ...session,
-          recording: {
-            ...rec,
-            transcript: rec.transcript.filter((_, i) => i !== message.index),
-            rev: (rec.rev ?? 0) + 1,
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        if (message.rev !== undefined && message.rev !== (rec.meta.rev ?? 0)) {
+          return { ok: true, stale: true };
+        }
+        await putRecording({
+          ...rec,
+          meta: {
+            ...rec.meta,
+            transcript: rec.meta.transcript.filter((_, i) => i !== message.index),
+            rev: (rec.meta.rev ?? 0) + 1,
             written: false,
           },
         });
         await broadcast();
         return { ok: true };
       }
-      case 'recording:transcript': {
-        const session = await getSession(message.id);
-        if (!session?.recording) return { ok: false };
-        const rec = session.recording;
-        await putSession({
-          ...session,
-          recording: {
+      case 'timeline:move': {
+        const byRec = new Map<string, TimelineMove[]>();
+        let stale = false;
+        for (const move of message.moves) {
+          byRec.set(move.recId, [...(byRec.get(move.recId) ?? []), move]);
+        }
+        // One write per record, however many items the drag picked up.
+        for (const [id, moves] of byRec) {
+          const rec = await getRecording(id);
+          if (!rec) continue;
+          // Frames are addressed by identity and survive anything; lines are array
+          // positions, so a transcript swapped under the drag makes them meaningless.
+          const fresh = freshFor(message.revs, id, rec.meta.rev);
+          if (!fresh) stale = true;
+          const frames = new Map<number, number>();
+          const lines = new Map<number, number>();
+          for (const move of moves) {
+            if (move.kind === 'frame') frames.set(move.index, move.tl);
+            else if (fresh) lines.set(move.index, move.tl);
+          }
+          if (!frames.size && !lines.size) continue;
+          await putRecording({
             ...rec,
+            meta: {
+              ...rec.meta,
+              frames: rec.meta.frames.map((f) =>
+                frames.has(f.index) ? { ...f, tl: frames.get(f.index) } : f,
+              ),
+              transcript: rec.meta.transcript.map((s, i) =>
+                lines.has(i) ? { ...s, tl: lines.get(i) } : s,
+              ),
+              rev: (rec.meta.rev ?? 0) + 1,
+              written: false,
+            },
+          });
+        }
+        await broadcast();
+        return stale ? { ok: true, stale: true } : { ok: true };
+      }
+      case 'timeline:delete': {
+        const byRec = new Map<string, TimelineRef[]>();
+        let stale = false;
+        for (const item of message.items) {
+          byRec.set(item.recId, [...(byRec.get(item.recId) ?? []), item]);
+        }
+        for (const [id, items] of byRec) {
+          const rec = await getRecording(id);
+          if (!rec) continue;
+          // Same split as timeline:move — identity-addressed frames go, positional
+          // lines don't when the transcript is not the one the caller saw.
+          const fresh = freshFor(message.revs, id, rec.meta.rev);
+          if (!fresh) stale = true;
+          const frames = new Set<number>();
+          const lines = new Set<number>();
+          for (const item of items) {
+            if (item.kind === 'frame') frames.add(item.index);
+            else if (fresh) lines.add(item.index);
+          }
+          if (!frames.size && !lines.size) continue;
+          for (const index of frames) await blobs.delete(`${id}:frame:${index}`);
+          // Lines are addressed by array position; splice from the back so the
+          // earlier indexes still mean what the caller meant.
+          const transcript = [...rec.meta.transcript];
+          for (const index of [...lines].sort((a, b) => b - a)) transcript.splice(index, 1);
+          await putRecording({
+            ...rec,
+            meta: {
+              ...rec.meta,
+              // Frames are never renumbered, and the file on disk is kept.
+              frames: rec.meta.frames.filter((f) => !frames.has(f.index)),
+              transcript,
+              rev: (rec.meta.rev ?? 0) + 1,
+              written: false,
+            },
+          });
+        }
+        await broadcast();
+        return stale ? { ok: true, stale: true } : { ok: true };
+      }
+      case 'recording:transcript': {
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        await putRecording({
+          ...rec,
+          meta: {
+            ...rec.meta,
             transcript: message.transcript,
             transcriber: 'whisper',
             // New words nobody has read yet — an earlier confirmation doesn't carry over.
             reviewed: false,
-            rev: (rec.rev ?? 0) + 1,
+            rev: (rec.meta.rev ?? 0) + 1,
             written: false,
           },
         });
@@ -389,18 +532,23 @@ chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) =>
         return { ok: true };
       }
       case 'recording:reviewed': {
-        const session = await getSession(message.id);
-        if (!session?.recording) return { ok: false };
-        const rec = session.recording;
-        await putSession({
-          ...session,
-          recording: { ...rec, reviewed: true, rev: (rec.rev ?? 0) + 1, written: false },
+        const rec = await getRecording(message.id);
+        if (!rec) return { ok: false };
+        await putRecording({
+          ...rec,
+          meta: { ...rec.meta, reviewed: true, rev: (rec.meta.rev ?? 0) + 1, written: false },
         });
         await broadcast();
         return { ok: true };
       }
+      case 'strip:track': {
+        await kv.set(STRIP_DOCK, { stripId: message.stripId, parentId: message.parentId });
+        return { ok: true };
+      }
       case 'recording:event':
       case 'recording:pointer':
+      case 'recording:force':
+      case 'recording:stop':
         // The side panel consumes these via its own onMessage listener; the
         // background only needs to not treat them as unknown.
         return { ok: true };

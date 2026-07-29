@@ -29,10 +29,17 @@
   --gut: 14px;
   --strip: 11px;
   --max: 100%;
+  /* the hero: the biggest control in the product, at every width */
+  --hero-h: 52px;
   /* content */
-  --thumb-w: 62px;
-  --thumb-h: 42px;
   --frame-min: 104px;
+  /* the timeline. --well is the one surface darker than the canvas: the track
+     area reads as a well the way an editor's does. */
+  --well: #08080a;
+  --monitor-h: 128px;
+  --ruler-h: 20px;
+  --track-h: 30px;
+  --cell-w: 56px;
 }
 
 @media (min-width: 480px) {
@@ -45,9 +52,12 @@
     --fs-2xs: 10.5px;
     --gut: 20px;
     --strip: 13px;
-    --thumb-w: 86px;
-    --thumb-h: 58px;
+    --hero-h: 60px;
     --frame-min: 150px;
+    --monitor-h: 176px;
+    --ruler-h: 22px;
+    --track-h: 36px;
+    --cell-w: 72px;
   }
 }
 
@@ -61,10 +71,13 @@
     --fs-2xs: 11px;
     --gut: 26px;
     --strip: 16px;
+    --hero-h: 68px;
     --max: 900px;
-    --thumb-w: 110px;
-    --thumb-h: 74px;
     --frame-min: 210px;
+    --monitor-h: 224px;
+    --ruler-h: 24px;
+    --track-h: 42px;
+    --cell-w: 88px;
   }
 }
 
@@ -120,10 +133,7 @@ textarea {
   border-radius: 5px;
   transition: opacity 0.12s ease;
 }
-.srow:hover .kill,
-.note:hover .kill,
-.rframe:hover .kill,
-.rec-script .line:hover .kill {
+.srow:hover .kill {
   opacity: 1;
 }
 .kill:hover {
@@ -169,6 +179,22 @@ textarea {
   font-size: var(--fs-2xs);
   color: var(--faint);
 }
+/* 380px is for capturing; the popped window is for editing. */
+.popout {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -6px calc(var(--gut) / -2) -6px 0;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  color: var(--faint);
+}
+.popout:hover {
+  color: var(--text);
+}
 
 /* ── the gripe, and where it lands ──────────────────────── */
 .session {
@@ -190,43 +216,64 @@ textarea {
 .session input::placeholder {
   color: var(--faint);
 }
-.chev {
+/* The old chevron said nothing. This says what it opens, and only when there
+   is something to open. */
+.histbtn {
   flex: none;
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-sm);
   color: var(--faint);
-  padding: 5px 8px;
+  padding: 4px 8px;
   border-radius: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  white-space: nowrap;
   transition: all 0.14s ease;
 }
-.chev:hover,
-.chev.open {
+.histbtn:hover,
+.histbtn.open {
   color: var(--text);
   border-color: var(--line-strong);
 }
 
-.folder {
+/* Where every gripe lands — one global inbox, not "the repo you're in". */
+.inbox {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 7px;
   min-width: 0;
 }
-.folder .status {
+/* One line. The path input, the why-copy and forget all live behind a click on it. */
+.inbox-line {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: all 0.14s ease;
+}
+.inbox-line:hover {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.inbox .status {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex: none;
   background: var(--faint);
 }
-.folder .status.ok {
+.inbox .status.ok {
   background: #58c98a;
 }
-.folder .status.warn {
+.inbox .status.warn {
   background: var(--accent);
 }
-.folder .path {
+.inbox .path {
   flex: 1;
   min-width: 0;
   font-family: var(--mono);
@@ -257,6 +304,45 @@ textarea {
 .link.hot:hover {
   border-color: rgba(255, 92, 57, 0.55);
   color: #fff;
+}
+/* The one thing missing that makes every prompt work. Accent because it is a
+   state — this inbox can't tell an agent where it lives yet. */
+.pathq {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-2xs);
+  color: #ffcbbb;
+  background: var(--accent-soft);
+  border: 1px solid rgba(255, 92, 57, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* Nothing connected: the only card in the panel, because nothing works without it. */
+.setup {
+  margin-top: 9px;
+  padding: calc(var(--strip) - 1px) calc(var(--gut) - 4px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raise);
+}
+.setup-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.setup-title {
+  flex: 1 1 auto;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.setup-why {
+  margin-top: 7px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--faint);
+  max-width: 62ch;
 }
 
 /* ── gripe switcher ─────────────────────────────────────── */
@@ -347,109 +433,70 @@ textarea {
   color: var(--faint);
   max-width: 62ch;
 }
+/* The only destructive control that isn't a hover-✕ — it needed a label. */
+.forget {
+  margin-top: 9px;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+.forget:hover {
+  color: var(--accent);
+  border-color: rgba(255, 92, 57, 0.4);
+}
 
-/* ── capture controls ───────────────────────────────────── */
+/* ── hero: record is the one big control ────────────────── */
 .controls {
   padding: var(--strip) var(--gut);
   border-bottom: 1px solid var(--line);
 }
-.arm {
+/* Idle it is a hairline, not an accent fill — nothing is live yet. The dot only
+   catches the accent on hover, where it means "this is what's about to happen".
+   It is full width and --hero-h tall at every breakpoint: there is one main
+   gesture in this product and this is it. */
+.hero {
   width: 100%;
+  height: var(--hero-h);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  padding: 12px;
-  border-radius: 10px;
-  background: var(--accent-soft);
-  border: 1px solid rgba(255, 92, 57, 0.3);
-  color: #ffcbbb;
+  gap: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
   font-size: var(--fs-lg);
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: 0.01em;
   transition: all 0.14s ease;
 }
-.arm:hover {
-  background: rgba(255, 92, 57, 0.2);
-  border-color: rgba(255, 92, 57, 0.5);
-  color: #fff;
+.hero .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+  transition: background 0.14s ease;
 }
-.arm:active {
+.hero:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 92, 57, 0.45);
+}
+.hero:hover .dot {
+  background: var(--accent);
+}
+.hero:active {
   transform: translateY(1px);
 }
-kbd {
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--line);
-  color: var(--muted);
-}
-.modes {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 7px;
-  margin-top: 8px;
-}
-.mode {
-  padding: 9px 4px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  transition: all 0.14s ease;
-}
-.mode:hover {
-  border-color: var(--line-strong);
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.03);
-}
-.hintline {
-  display: block;
-  width: 100%;
-  margin-top: 9px;
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-  text-align: center;
-  padding: 3px;
-  border-radius: 5px;
-}
-.hintline:hover {
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.03);
-}
 
-/* Past ~520px the CTA and the four modes read as one control bar instead of a
-   stack of full-width slabs. */
-@media (min-width: 520px) {
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-  }
-  .arm {
-    width: auto;
-    flex: 1 1 240px;
-  }
-  .modes {
-    margin-top: 0;
-    flex: 2 1 300px;
-  }
-  .hintline {
-    margin-top: 0;
-    flex: 1 0 100%;
-    text-align: left;
-    padding-inline: 2px;
-  }
-}
-
-/* ── notes ──────────────────────────────────────────────── */
-.notes {
+/* ── timeline ───────────────────────────────────────────── */
+.tl {
   flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .empty {
   padding: clamp(36px, 9vh, 72px) var(--gut);
@@ -463,108 +510,484 @@ kbd {
   font-weight: 600;
 }
 
-.note {
-  display: flex;
-  gap: 12px;
-  padding: var(--strip) var(--gut);
-  border-bottom: 1px solid var(--line);
+/* The monitor: the one place a keyframe is big enough to read anything in.
+   It is also the elastic one: slack goes into the picture, and a squeeze comes
+   out of it first (shrink 100 against the axis's 1) so the lanes and the zoom
+   row are the last things to give ground, never the first. */
+.tl-monitor {
   position: relative;
-}
-.note:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-.note .thumb {
-  width: var(--thumb-w);
-  height: var(--thumb-h);
-  flex: none;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  object-fit: cover;
-  object-position: top left;
+  flex: 1 100 var(--monitor-h);
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
   background: #000;
-  cursor: zoom-in;
+  border-bottom: 1px solid var(--line);
 }
-.note .idx {
+.tl-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Everything that isn't the picture. One box, so the two shapes are one flex
+   direction apart. */
+.tl-axis {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tl-monitor img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+}
+.tl-clock {
   position: absolute;
-  left: calc(var(--gut) - 6px);
-  top: calc(var(--strip) - 3px);
+  right: 8px;
+  bottom: 7px;
   font-family: var(--mono);
   font-size: var(--fs-2xs);
-  font-weight: 700;
-  color: #1a0a05;
-  background: var(--accent);
-  border-radius: 3px;
-  padding: 1px 4px;
-  pointer-events: none;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
-.note .body {
+
+/* The subtitle line under the video. Long transcripts get read and fixed here —
+   the blocks below are structure, this is the words. */
+.tl-read {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: calc(var(--strip) - 4px) var(--gut);
+  border-bottom: 1px solid var(--line);
+  background: var(--raise);
+  font-size: var(--fs-md);
+  cursor: text;
+}
+.tl-at {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.tl-said {
   flex: 1;
   min-width: 0;
-}
-.note .text {
-  font-size: var(--fs-md);
-  line-height: 1.5;
-  word-break: break-word;
-  cursor: text;
-  max-width: 78ch;
-}
-.note .text.blank {
-  color: var(--faint);
-  font-style: italic;
-}
-.note textarea {
-  width: 100%;
-  font-size: var(--fs-md);
-  line-height: 1.5;
-  resize: none;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 6px;
-  padding: 6px 8px;
-  caret-color: var(--accent);
-}
-.note .meta {
-  margin-top: 5px;
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-  min-width: 0;
-}
-.note .meta span {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.tl-read input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 7px;
+  caret-color: var(--accent);
+}
+
+/* The one thing an agent can't recover from: a word the ASR got wrong. */
+.tl-nag {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: calc(var(--strip) - 2px) var(--gut);
+  background: rgba(255, 92, 57, 0.07);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.tl-nag span {
+  flex: 1 1 24ch;
+  max-width: 70ch;
+}
+.tl-nag b {
+  color: var(--text);
+}
+.tl-nag button {
+  flex: none;
+  padding: 6px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  font-size: var(--fs-sm);
+  color: var(--text);
   white-space: nowrap;
 }
-.note .meta .sel {
-  color: rgba(255, 92, 57, 0.75);
+.tl-nag button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The transcriber, said once and quietly. The word is the status. */
+.tl-busy {
   flex: none;
-  max-width: 45%;
-}
-.note .kill {
-  right: calc(var(--gut) - 6px);
-  top: calc(var(--strip) - 3px);
-}
-.note .errs {
-  margin-top: 6px;
+  padding: 5px var(--gut);
+  border-bottom: 1px solid var(--line);
   font-family: var(--mono);
   font-size: var(--fs-2xs);
-  color: rgba(255, 92, 57, 0.7);
+  color: var(--faint);
 }
-.shot {
-  padding: 0 var(--gut) var(--strip);
+
+/* Ruler and tracks share one scroller so they can never disagree about x.
+   It hugs its lanes — a well with nothing in it is the thing that made this
+   look like a broken editor. */
+.tl-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--well);
+}
+.tl-inner {
+  position: relative;
+  min-width: 100%;
+}
+
+.tl-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  height: var(--ruler-h);
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  cursor: crosshair;
+}
+.tl-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--ruler-h);
+  color: var(--faint);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* The grab handle. The line itself stays out of the way of everything below. */
+.tl-knob {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 13px;
+  margin-left: -6px;
+  z-index: 5;
+  cursor: ew-resize;
+}
+.tl-knob::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 2px;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 6px solid var(--accent);
+}
+.tl-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.tl-tracks {
+  position: relative;
+}
+.tl-strip,
+.tl-voice {
+  position: relative;
+  height: var(--track-h);
   border-bottom: 1px solid var(--line);
 }
-.shot img {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  display: block;
-  cursor: zoom-out;
+/* Sticky so the row still says what it is once you've scrolled into the middle. */
+.tl-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: inline-block;
+  padding: 2px 12px 2px 6px;
+  font-family: var(--mono);
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  background: linear-gradient(90deg, var(--well), var(--well) 60%, transparent);
+  pointer-events: none;
+  user-select: none;
 }
-.shot img + img {
-  margin-top: 8px;
+
+/* The filmstrip. Cells are fixed-width and edge to edge, so an hour of footage
+   is a strip of thumbnails and not a deck of cards thrown at the track. */
+.tl-cell {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: #000;
+  border-right: 1px solid rgba(0, 0, 0, 0.6);
+  cursor: crosshair;
+  user-select: none;
+}
+.tl-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  display: block;
+}
+/* No keyframe anywhere near this slice — nothing happened here, and it shows. */
+.tl-cell.gap {
+  background: rgba(255, 255, 255, 0.03);
+  border-right-color: var(--line);
+}
+.tl-cell.on {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 2;
+  cursor: grab;
+}
+/* A human said "this one matters" — that is exactly what the accent is for.
+   Marks are instants, so they ride the top edge at their own x, not a cell's. */
+.tl-marks {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  pointer-events: none;
+  z-index: 3;
+}
+.tl-mark {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 3px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
+/* Voice is blocks first, text second: width is duration, always, and the words
+   only appear once there is room for words. */
+.tl-clip {
+  position: absolute;
+  top: 4px;
+  height: calc(var(--track-h) - 9px);
+  display: flex;
+  align-items: center;
+  /* No padding on the box: border-box would floor a 5px clip at its own padding,
+     and clips a few px apart would overlap again. The text carries the inset. */
+  padding: 0;
+  min-width: 2px;
+  border-radius: 2px;
+  border-right: 1px solid var(--well);
+  background: rgba(255, 255, 255, 0.09);
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+}
+.tl-clip span {
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Under the playhead right now. */
+.tl-clip.now {
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--text);
+}
+.tl-clip.edit {
+  width: auto;
+  min-width: 240px;
+  max-width: 62ch;
+  z-index: 6;
+}
+.tl-clip input {
+  width: 100%;
+  font-size: var(--fs-sm);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  padding: 2px 6px;
+  caret-color: var(--accent);
+}
+
+/* Selected is a state, so it wears the accent — as an outline, never a fill. */
+.tl-clip.on {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  color: var(--text);
+  z-index: 2;
+}
+
+/* Where one take ends and the next begins. No label, no number — it's one gripe. */
+.tl-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--line-strong);
+  pointer-events: none;
+  z-index: 3;
+}
+.tl-range,
+.tl-marquee {
+  position: absolute;
+  background: var(--accent-soft);
+  border: 1px solid rgba(255, 92, 57, 0.4);
+  pointer-events: none;
+  z-index: 4;
+}
+.tl-range {
+  top: 0;
+  bottom: 0;
+}
+
+/* Only here when something is picked, and it carries the one destructive verb. */
+.tl-bar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: calc(var(--strip) - 4px) var(--gut);
+  border-top: 1px solid var(--line);
+  background: var(--accent-soft);
+  font-size: var(--fs-sm);
+  color: #ffcbbb;
+}
+.tl-bar button {
+  flex: none;
+  margin-left: auto;
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 92, 57, 0.4);
+  font-size: var(--fs-sm);
+  color: #ffcbbb;
+}
+.tl-bar button:hover {
+  background: rgba(255, 92, 57, 0.18);
+  color: #fff;
+}
+
+.tl-zoom {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  padding: 5px var(--gut) 6px;
+  border-top: 1px solid var(--line);
+}
+.tl-zoom button {
+  width: 22px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  color: var(--faint);
+}
+.tl-zoom button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.tl-zoom button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.tl-zoom .tl-fit {
+  width: auto;
+  padding: 0 9px;
+  font-size: var(--fs-2xs);
+}
+
+/* ── timeline, landscape ────────────────────────────────────
+   The popped editor is a dock strip across the bottom of the window: short and
+   very wide. Same tree, one flex direction turned — picture on the left, the
+   whole axis beside it. Timeline.tsx measures its own box, not the window,
+   because the panel and the strip are the same component. */
+.tl.wide {
+  flex-direction: row;
+}
+.tl.wide .tl-monitor {
+  flex: 0 0 clamp(300px, 30%, 360px);
+  min-height: 0;
+  border-bottom: 0;
+  border-right: 1px solid var(--line);
+}
+/* Out of the corner and onto its own line — there is room for it here. */
+.tl.wide .tl-clock {
+  position: static;
+  align-self: center;
+  margin: 5px 0 6px;
+  background: none;
+  padding: 0;
+}
+.tl.wide .tl-axis {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Three wrapped lines with 600px of empty room beside them costs the strip half
+   its editor. Wider cap here only — still short of a full-bleed 150ch line. */
+.tl.wide .tl-nag {
+  padding-block: 7px;
+}
+.tl.wide .tl-nag span {
+  max-width: 96ch;
+}
+/* Landscape has vertical room the rail never has, so the well takes it and both
+   lanes grow into it — nothing is left reserved and empty. The filmstrip stops
+   at a height its cells stay landscape at (140×88 against a 16:10 frame is
+   almost no crop); past that the voice lane takes the rest, which is what an
+   audio track does anyway. */
+.tl.wide {
+  --cell-w: 140px;
+}
+.tl.wide .tl-scroll {
+  flex: 1 1 auto;
+}
+.tl.wide .tl-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.tl.wide .tl-tracks {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tl.wide .tl-strip {
+  flex: 1 1 auto;
+  min-height: var(--track-h);
+  max-height: 88px;
+}
+.tl.wide .tl-voice {
+  flex: 1 1 auto;
+  min-height: var(--track-h);
+}
+.tl.wide .tl-clip {
+  height: calc(100% - 9px);
+}
+
+/* The dock strip is the one surface that wants the whole window: a 900px column
+   centred in a 1500px dock wastes half of it. Wide and short is a shape the rail
+   and a normal tab never have. */
+@media (min-width: 1000px) and (max-height: 560px) {
+  :root {
+    --max: 100%;
+  }
 }
 
 /* ── footer ─────────────────────────────────────────────── */
@@ -609,34 +1032,122 @@ kbd {
   cursor: default;
 }
 
+/* ── the popped editor strip ────────────────────────────── */
+/* One slim bar of chrome; the timeline owns every other pixel. The capture
+   controls live in the side panel — this surface is for reading and cutting. */
+.app.pop .head {
+  gap: 10px;
+  padding: 7px var(--gut);
+}
+.app.pop .tl {
+  flex: 1;
+  min-height: 0;
+}
+.popname {
+  flex: 0 1 280px;
+  min-width: 90px;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+.popname::placeholder {
+  color: var(--faint);
+}
+/* The footer buttons, shrunk to bar height. */
+.app.pop .primary {
+  flex: none;
+  padding: 6px 13px;
+  font-size: var(--fs-sm);
+  border-radius: 999px;
+}
+.app.pop .ghost {
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+.recmini,
+.stopmini {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.recmini:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.recmini .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.stopmini {
+  background: var(--text);
+  color: #0a0a0c;
+  border-color: transparent;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The one switch nobody needs on their first gripe, behind one faint word. */
+.settings {
+  border-top: 1px solid var(--line);
+}
+.settings-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: calc(var(--strip) - 3px) var(--gut);
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+.settings-row:hover,
+.settings-row.open {
+  color: var(--muted);
+}
+/* A sentence, not a pill: one per line, the dot carries the state. */
 .toggles {
   display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: calc(var(--strip) - 2px) var(--gut);
-  border-top: 1px solid var(--line);
+  flex-direction: column;
+  padding: 0 var(--gut) calc(var(--strip) - 1px);
 }
 .toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: var(--fs-2xs);
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  font-size: var(--fs-sm);
   color: var(--faint);
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
+  padding: 6px 0;
+}
+.toggle:hover {
+  color: var(--muted);
 }
 .toggle.on {
-  color: #ffcbbb;
-  border-color: rgba(255, 92, 57, 0.35);
-  background: var(--accent-soft);
+  color: var(--text);
 }
 .toggle i {
-  width: 5px;
-  height: 5px;
+  flex: none;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background: currentColor;
-  opacity: 0.55;
+  border: 1px solid var(--line-strong);
+  transition:
+    background 140ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    border-color 140ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.toggle.on i {
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .flash {
@@ -661,13 +1172,19 @@ kbd {
   }
 }
 
-/* ── recording ──────────────────────────────────────────── */
-.rec {
+/* ── the live HUD: the hero while a walkthrough runs ────── */
+.hud {
+  background: var(--accent-soft);
+  border: 1px solid rgba(255, 92, 57, 0.3);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+.hud .live-row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.rec-dot {
+.hud .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -675,22 +1192,22 @@ kbd {
   animation: pulse 1.6s infinite;
   flex: none;
 }
-.rec-time {
+.hud .clock {
   font-family: var(--mono);
   font-size: var(--fs-xl);
   font-weight: 600;
 }
-.rec-meta {
+.hud .stat {
   flex: 1;
   min-width: 0;
   font-family: var(--mono);
   font-size: var(--fs-2xs);
-  color: var(--faint);
+  color: rgba(255, 203, 187, 0.6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rec-stop {
+.hud .stop {
   padding: 9px 18px;
   border-radius: 8px;
   background: var(--text);
@@ -698,11 +1215,11 @@ kbd {
   font-size: var(--fs-sm);
   font-weight: 650;
 }
-.rec-stop:disabled {
+.hud .stop:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.rec-interim {
+.hud .interim {
   margin-top: 9px;
   min-height: 1.3em;
   font-size: var(--fs-sm);
@@ -711,156 +1228,23 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rec-interim.warn {
+.hud .interim.warn {
   color: #ffcbbb;
 }
-button.rec-interim {
+button.interim {
   display: block;
   width: 100%;
   text-align: left;
   padding: 0;
 }
-button.rec-interim:hover {
+button.interim:hover {
   text-decoration: underline;
 }
-.rec-hint {
+/* Where the rest of the controls went. One line, said once. */
+.hud .sub {
   margin-top: 8px;
   font-size: var(--fs-2xs);
   color: var(--faint);
-}
-.rec-hint kbd {
-  font-size: var(--fs-2xs);
-  border-color: var(--line-strong);
-}
-
-/* The one thing an agent can't recover from: a word the ASR got wrong. */
-.rec-check {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: var(--strip) var(--gut);
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 92, 57, 0.07);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--muted);
-}
-.rec-check span {
-  max-width: 70ch;
-}
-.rec-check b {
-  color: var(--text);
-}
-.rec-check button {
-  flex: none;
-  margin-left: auto;
-  padding: 7px 12px;
-  border-radius: 7px;
-  border: 1px solid var(--line-strong);
-  font-size: var(--fs-sm);
-  color: var(--text);
-  white-space: nowrap;
-}
-.rec-check button:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.rec-sum {
-  padding: calc(var(--strip) - 1px) var(--gut);
-  border-bottom: 1px solid var(--line);
-  font-family: var(--mono);
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-.rec-whisper {
-  padding: calc(var(--strip) - 2px) var(--gut);
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--line);
-}
-.rec-frames {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--frame-min), 1fr));
-  gap: 8px;
-  padding: var(--strip) var(--gut);
-}
-.rframe {
-  position: relative;
-  cursor: zoom-in;
-}
-.rframe img {
-  width: 100%;
-  aspect-ratio: 16 / 10;
-  object-fit: cover;
-  object-position: top left;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: #000;
-  display: block;
-}
-.rframe .rtime {
-  position: absolute;
-  left: 5px;
-  bottom: 5px;
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
-  color: var(--muted);
-  background: rgba(0, 0, 0, 0.65);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-.rtime.marked {
-  color: var(--accent);
-}
-.rframe .kill {
-  right: 3px;
-  top: 3px;
-  padding: 2px 6px;
-  background: rgba(0, 0, 0, 0.65);
-}
-
-.rec-script {
-  padding: 4px 0 var(--strip);
-}
-.rec-script .line {
-  position: relative;
-  display: flex;
-  gap: 10px;
-  padding: 6px var(--gut);
-  padding-right: calc(var(--gut) + 18px);
-  font-size: var(--fs-md);
-  line-height: 1.5;
-}
-.rec-script .line:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-.rec-script .at {
-  flex: none;
-  padding-top: 2px;
-  font-family: var(--mono);
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-}
-.rec-script .line .txt {
-  cursor: text;
-  max-width: 78ch;
-}
-.rec-script .line input {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-md);
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 5px;
-  padding: 2px 7px;
-  caret-color: var(--accent);
-}
-.rec-script .line .kill {
-  right: calc(var(--gut) - 8px);
-  top: 5px;
 }
 
 @keyframes pulse {

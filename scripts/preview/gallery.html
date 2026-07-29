@@ -5,27 +5,43 @@
     <title>Gripe — widths</title>
     <style>
       html, body { height: 100%; margin: 0; background: #050507; font: 11px ui-monospace, monospace; color: #888; }
+      .modes { display: flex; gap: 10px; padding: 8px 8px 0; }
+      .modes a { color: #888; text-decoration: none; border-bottom: 1px solid transparent; }
+      .modes a:hover { color: #f2efec; }
+      .modes a.on { color: #ff5c39; border-color: #ff5c39; }
       .row { display: flex; gap: 10px; align-items: flex-start; padding: 8px; }
       .cell { display: flex; flex-direction: column; gap: 4px; }
       iframe { border: 1px solid #333; background: #0a0a0c; display: block; }
     </style>
   </head>
   <body>
+    <div class="modes" id="modes"></div>
     <div class="row" id="row"></div>
     <script>
       const q = new URLSearchParams(location.search);
-      const widths = (q.get('w') || '380,560,900').split(',').map(Number);
+      // Each token is `W` (shared height) or `WxH` — the dock strip is a shape,
+      // not a width, so 1500x400 has to be expressible.
+      const widths = (q.get('w') || '380,560,900').split(',');
       const mode = q.get('mode') || 'rec';
-      const h = Number(q.get('h')) || Math.max(560, window.innerHeight - 40);
-      for (const w of widths) {
+      const h = Number(q.get('h')) || Math.max(560, window.innerHeight - 60);
+      for (const m of ['rec', 'long', 'empty', 'nofolder']) {
+        const a = document.createElement('a');
+        a.textContent = m;
+        a.href = `?w=${widths.join(',')}&mode=${m}`;
+        if (m === mode) a.className = 'on';
+        document.getElementById('modes').append(a);
+      }
+      for (const token of widths) {
+        const [w, own] = String(token).split('x').map(Number);
         const cell = document.createElement('div');
         cell.className = 'cell';
         const label = document.createElement('div');
-        label.textContent = w + 'px';
+        label.textContent = own ? `${w}×${own}` : `${w}px`;
         const f = document.createElement('iframe');
-        f.src = `/preview.html?mode=${mode}&t=${Date.now()}`;
+        // A token with its own height is the dock strip, and the strip runs popped.
+        f.src = `/preview.html?mode=${mode}${own ? '&pop=1' : ''}&t=${Date.now()}`;
         f.width = w;
-        f.height = h;
+        f.height = own || h;
         cell.append(label, f);
         document.getElementById('row').append(cell);
       }

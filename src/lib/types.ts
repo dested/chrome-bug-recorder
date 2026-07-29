@@ -1,25 +1,8 @@
-export type CaptureMode = 'element' | 'region' | 'draw' | 'page';
-
-export interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface TargetInfo {
-  selector: string;
-  tag: string;
-  id?: string;
-  classes: string[];
-  /** Trimmed visible text, useful for "the Place order button". */
-  text?: string;
-  /** Attributes worth handing to an agent: data-testid, aria-label, href, name… */
-  attrs: Record<string, string>;
-  /** Opening tag + a little content, truncated. */
-  html: string;
-  rect: Rect;
-}
+/**
+ * A gripe is a narrated screen recording, taken in one or more sittings, and
+ * everything here describes one: the takes, what was said over them, the frames
+ * that survived dedup, and what the page complained about while it was running.
+ */
 
 export interface PageEvent {
   level: 'error' | 'warn' | 'network';
@@ -28,54 +11,13 @@ export interface PageEvent {
   ts: number;
 }
 
-export interface Viewport {
-  width: number;
-  height: number;
-  dpr: number;
-  scrollX: number;
-  scrollY: number;
-}
-
-export interface Note {
-  id: string;
-  sessionId: string;
-  index: number;
-  createdAt: number;
-  text: string;
-  mode: CaptureMode;
-  url: string;
-  title: string;
-  viewport: Viewport;
-  target?: TargetInfo;
-  region?: Rect;
-  strokes?: number;
-  events: PageEvent[];
-  fullFile: string;
-  cropFile?: string;
-  /** True once this note's files exist in the connected project folder. */
-  written: boolean;
-}
-
-/** What the content script hands to the background worker. */
-export interface NoteDraft {
-  text: string;
-  mode: CaptureMode;
-  url: string;
-  title: string;
-  viewport: Viewport;
-  target?: TargetInfo;
-  region?: Rect;
-  strokes?: number;
-  events: PageEvent[];
-  fullImage: string;
-  cropImage?: string;
-}
-
 export interface TranscriptSegment {
   /** ms from recording start — where the speaker *started* the line */
   t: number;
   /** Spoken length in ms when the transcriber reported one. A line covers a window, not an instant. */
   d?: number;
+  /** Position on the gripe's unified axis, ms. Set only when a human moved it; absent = computed from t. */
+  tl?: number;
   text: string;
 }
 
@@ -115,12 +57,19 @@ export interface RecordingFrame {
   t: number;
   /** Path relative to the session folder, e.g. frames/03-0125.jpg */
   file: string;
-  /** Why this frame exists: first frame, dedup said "new", or the human hit the mark hotkey. */
-  reason: 'start' | 'change' | 'mark';
+  /**
+   * Why this frame exists: first frame, dedup said "new", the human hit the mark
+   * hotkey, a click just happened in the recorded tab, the page navigated (SPA
+   * route or full load), or the heartbeat fired — nothing had been kept for a
+   * while and the screen wasn't strictly identical.
+   */
+  reason: 'start' | 'change' | 'mark' | 'click' | 'nav' | 'beat';
   /** Changed-cell count (of 64×64) vs the closest of the last kept frames (absent on the first). */
   dist?: number;
   /** Mouse at capture time, when the recorded tab was reporting it. */
   pointer?: FramePointer;
+  /** Position on the gripe's unified axis, ms. Set only when a human moved it; absent = computed from t. */
+  tl?: number;
 }
 
 export interface RecordingMeta {
@@ -147,6 +96,26 @@ export interface RecordingMeta {
   written: boolean;
 }
 
+/**
+ * One part of a gripe. Recording and re-recording appends parts to the same
+ * session, so a walkthrough is not a kind of session — it's a record inside one.
+ */
+export interface Recording {
+  id: string;
+  sessionId: string;
+  /** 1-based part number within the gripe; names the rec-NN folder. */
+  index: number;
+  createdAt: number;
+  state: 'recording' | 'done';
+  /** Set when the panel died mid-recording and the chunks were reassembled. */
+  interrupted?: boolean;
+  /** MediaRecorder mime, needed to reassemble chunks. */
+  mime: string;
+  /** Count of persisted 1s chunk blobs (`<id>:chunk:<n>`, n from 1) while state is 'recording'. */
+  chunks: number;
+  meta: RecordingMeta;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -154,43 +123,27 @@ export interface Session {
   createdAt: number;
   updatedAt: number;
   origin: string;
-  noteCount: number;
-  /** Handed off and finished. A closed session never receives another note; activating it reopens it. */
+  /** Source of the next part index. Deleting a part doesn't renumber. */
+  recCount: number;
+  /** Handed off and finished. A closed session never receives another part; activating it reopens it. */
   closed?: boolean;
-  /** Absent means a plain note session. */
-  kind?: 'recording';
-  recording?: RecordingMeta;
 }
 
+/** One thing sitting on the gripe's timeline, addressed the way the store finds it again. */
+export type TimelineRef =
+  | { kind: 'frame'; recId: string; index: number } // RecordingFrame.index — identity, survives deletes
+  | { kind: 'line'; recId: string; index: number }; // array position in meta.transcript
+
+/** A dragged item and where it landed. */
+export type TimelineMove = TimelineRef & { tl: number };
+
 export interface Settings {
-  /** Autostart dictation when the composer opens. */
-  autoDictate: boolean;
-  /** Dim everything outside the target in the full screenshot. */
-  spotlight: boolean;
-  /** Stay armed after saving a note. */
-  chain: boolean;
-  /** Save the note automatically once you stop talking. */
-  autoSend: boolean;
-  /** How long a silence counts as "done talking". */
-  autoSendMs: number;
+  /** Start every recording with the on-page ink active — draw first, click through on demand. */
+  drawStart: boolean;
   lang: string;
 }
 
-export const DEFAULT_SETTINGS: Settings = {
-  autoDictate: true,
-  spotlight: true,
-  chain: false,
-  autoSend: true,
-  autoSendMs: 3000,
-  lang: '',
-};
-
-/**
- * Say any of these and the note commits — no reaching for the keyboard. Matched
- * against the end of the transcript and stripped before saving.
- */
-export const SEND_PHRASES =
-  /\s*(?:and\s+)?(?:that'?s it|save it|save that|send it|log it|ship it|next note|end note|next)\s*[.!?]?\s*$/i;
+export const DEFAULT_SETTINGS: Settings = { drawStart: true, lang: '' };
 
 export const ACCENT = '#ff5c39';
 

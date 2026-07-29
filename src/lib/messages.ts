@@ -1,42 +1,52 @@
 import type {
-  CaptureMode,
-  NoteDraft,
   PageEvent,
   PointerSample,
   RecordingMeta,
   Settings,
+  TimelineMove,
+  TimelineRef,
   TranscriptSegment,
 } from './types';
 
 /** Content script / side panel → background. */
 export type Request =
-  | { type: 'capture:visible' }
-  | { type: 'note:add'; draft: NoteDraft }
   | { type: 'settings:get' }
   | { type: 'settings:set'; patch: Partial<Settings> }
   | { type: 'session:rename'; id: string; name: string }
   | { type: 'session:activate'; id: string }
   | { type: 'session:delete'; id: string }
-  // Handed off and finished: no more notes land here, and the panel goes blank
-  // until the next capture opens a fresh one.
+  // Handed off and finished: no more takes land here, and the panel goes blank
+  // until the next recording opens a fresh one.
   | { type: 'session:close'; id: string }
   // Mark everything in a session unwritten so the folder is rebuilt (the project
   // path changed, and it's printed at the top of every report).
   | { type: 'session:rewrite'; id: string }
-  | { type: 'note:update'; id: string; text: string }
-  | { type: 'note:delete'; id: string }
-  | { type: 'note:written'; ids: string[] }
   | { type: 'state:get' }
-  | { type: 'arm'; mode: CaptureMode; tabId?: number }
-  | { type: 'disarm' }
-  // The panel has already stored the frame/video blobs under `id`; the
-  // background just mints the Session record around them.
-  | { type: 'recording:add'; id: string; name: string; origin: string; meta: RecordingMeta }
+  // The panel minted `id` and got the screen share; this opens the part inside
+  // the active gripe (or a fresh one) and answers with its part number.
+  | { type: 'recording:start'; id: string; name: string; origin: string }
+  // Fires every couple of seconds while recording — meta so far, plus how many
+  // 1s chunk blobs are on disk. Deliberately silent: no broadcast.
+  | { type: 'recording:progress'; id: string; meta: RecordingMeta; mime: string; chunks: number }
+  | { type: 'recording:finish'; id: string; meta: RecordingMeta }
+  // getDisplayMedia was granted but the recorder never really started.
+  | { type: 'recording:discard'; id: string }
+  // The panel died mid-part; reassemble the chunk blobs into the video.
+  | { type: 'recording:recover'; id: string }
   | { type: 'recording:setActive'; active: boolean }
   | { type: 'recording:written'; id: string; rev: number }
   | { type: 'recording:frame:delete'; id: string; index: number }
-  | { type: 'recording:line:update'; id: string; index: number; text: string }
-  | { type: 'recording:line:delete'; id: string; index: number }
+  // Lines are addressed by array position, and a Whisper pass replaces the whole
+  // array — `rev` is the meta.rev the caller was looking at. Mismatch = skip.
+  | { type: 'recording:line:update'; id: string; index: number; text: string; rev?: number }
+  | { type: 'recording:line:delete'; id: string; index: number; rev?: number }
+  // A drag on the timeline landed: every moved item's new position on the gripe's
+  // unified axis, in one write. `revs` is recId → the meta.rev that recording had
+  // when the panel drew what was dragged.
+  | { type: 'timeline:move'; moves: TimelineMove[]; revs?: Record<string, number> }
+  // The selection bar's delete — frames and lines in one go. This is how a ramble
+  // gets sanitized before it reaches the agent.
+  | { type: 'timeline:delete'; items: TimelineRef[]; revs?: Record<string, number> }
   // The on-device Whisper pass finished and supersedes the Web Speech lines.
   | { type: 'recording:transcript'; id: string; transcript: TranscriptSegment[] }
   // The human read the transcript back and confirmed it.
@@ -44,19 +54,28 @@ export type Request =
   // Content script → panel, relayed while a recording is live. `origin` is the
   // sender's own, so the panel can drop everything outside the recorded tab.
   | { type: 'recording:event'; event: PageEvent; origin: string }
-  | { type: 'recording:pointer'; sample: PointerSample; origin: string };
+  | { type: 'recording:pointer'; sample: PointerSample; origin: string }
+  // A click or an SPA route change — force a keyframe the dedup would call identical.
+  | { type: 'recording:force'; why: 'click' | 'nav'; origin: string }
+  // The on-page toolbar's stop button. The panel owns the recorder, so it acts;
+  // the background just answers ok.
+  | { type: 'recording:stop' }
+  // The editor strip was popped out over `parentId`'s bottom edge; the worker
+  // re-pins it on every parent move/resize so it behaves docked.
+  | { type: 'strip:track'; stripId: number; parentId: number };
 
 /** Background → content script. */
 export type ContentCommand =
-  | { type: 'arm'; mode: CaptureMode; settings: Settings }
-  | { type: 'disarm' }
-  | { type: 'recording'; active: boolean }
+  // `origin` scopes the on-page recording toolbar to the recorded tab; `drawStart`
+  // is whether the ink layer wakes up armed.
+  | { type: 'recording'; active: boolean; origin?: string; drawStart?: boolean }
+  // Toggle the live ink layer over the page — only meaningful while recording.
+  | { type: 'draw:toggle' }
   | { type: 'ping' };
 
 /** Background → side panel broadcast. */
 export type Broadcast =
   | { type: 'state:changed' }
-  | { type: 'note:captured'; noteId: string }
   // The mark hotkey fired. It's a command, so only the worker hears it.
   | { type: 'recording:mark' };
 

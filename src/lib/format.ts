@@ -9,7 +9,14 @@ export function slugify(input: string, max = 42): string {
   return slug || 'session';
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
+/** Two-digit zero pad. Every number that lands in a filename goes through this. */
+export const pad2 = (n: number) => String(n).padStart(2, '0');
+const pad = pad2;
+
+/** rec-01 — the folder one part of a gripe lives in. Writer and report must agree. */
+export function recDirName(index: number): string {
+  return `rec-${pad2(index)}`;
+}
 
 /** 2026-07-25-1432 — sortable, filesystem-safe, readable at a glance. */
 export function stamp(ts: number): string {

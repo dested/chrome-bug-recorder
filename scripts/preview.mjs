@@ -12,7 +12,7 @@ import { extname, join, resolve } from 'node:path';
  *   npm run build && npm run preview
  *   http://localhost:8777/gallery.html?w=380,560,900&mode=rec
  *
- * `mode` is rec | notes | empty | nofolder. `w` is a comma-separated list of CSS
+ * `mode` is rec | empty | nofolder. `w` is a comma-separated list of CSS
  * widths, each rendered in its own iframe so the panel's media queries see it.
  * Zero dependencies, like everything else here.
  */
