@@ -2,6 +2,18 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-29 — Inloop built: the cloud workspace shipped as its own repo
+Asked: "start a fresh repo and start building… full website with marketing and pitch and login…
+fully completed project." Done: **G:\code\inloop** (github.com/dested/inloop, private) — S3 +
+Postgres ingest, push CLI, review workspace (inbox/viewer/team/projects), landing site, stdio MCP
+for agent pull. This repo (the extension) is untouched; next integration step is direct upload from
+the extension. Strategy plan flipped to done (per plans/2026-07-29-enterprise-strategy.md).
+
+## 2026-07-29 — enterprise strategy + the overlay-over-Excel answer
+Asked: can the extension draw over native apps (no), and how to take Gripe enterprise — pricing,
+consumer tier, integrations, Claude Code auto-run, possible rewrite. Done: strategy dumped in chat,
+mirrored to `plans/2026-07-29-enterprise-strategy.md` (active). No code touched.
+
 ## 2026-07-29 — a gripe is one timeline: notes deleted, an NLE editor, a bottom strip
 Asked: "no more of this recording 1 recordfing 2 like its just a timeline… redesign the ui to look like
 a timeline view like after effects… the whole idae is to sanatize the prompt we send to claude", plus
