@@ -85,10 +85,10 @@ sleeper feature: you complain about a button, and the report already contains th
 Then you paste the line the panel put on your clipboard:
 
 > Read G:\code\gripes\2026-07-29-1432-checkout-flow\report.md and fix what it describes.
-> It's a gripe I recorded against the running app — 2 walkthrough parts, in the order they
-> happened. The images are the evidence — read each part's contact sheets before its
-> timeline, look at every screenshot, and where the words and the frames disagree, believe
-> the frames.
+> It's a gripe I recorded against the running app — 2 recordings on one timeline, in the
+> order they happened. The images are the evidence — read the contact sheets first, then
+> the timeline, look at every screenshot, and where the words and the frames disagree,
+> believe the frames.
 
 ## Install
 
@@ -220,8 +220,9 @@ writer, the PNG icon generator, and the contact-sheet builder are all hand-rolle
   overlay, so you can't annotate your editor or another window — only the page you're on.
 - The mic is granted to the extension, not per site, which is why the permission page opens
   in a tab. Whisper's model (~250MB) downloads on first use and is cached by the browser.
-- The editor strip is a popup window, so another window can cover it. It follows the browser
-  window it was opened from and closes with it.
+- The editor strip is a popup window, so another window can cover it — and it sits where the
+  recording toolbar does, so it can cover that too if you leave it open while recording. It
+  follows the browser window it was opened from and closes with it.
 - Deleting something from the timeline rewrites the report but leaves the original
   `walkthrough.webm` untouched — there's no undo, but nothing is truly lost either.
 - `gripes/` is yours to gitignore or commit. Nothing else in the folder you connect is ever

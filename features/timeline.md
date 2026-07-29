@@ -166,6 +166,9 @@ token; `written: false` is what makes the folder rewrite.
   claiming frames globally instead of clamping to its own take, and contact sheets are re-sorted by
   axis position with an explicit "(ranges overlap — items were reordered)" note when that reordering
   makes two sheets cover the same stretch.
+- **The strip and the dock want the same pixels.** Both live on the bottom edge, so a strip left
+  open during a recording can cover the dock. Accepted: the strip is for editing after the fact,
+  and the dock's keys still work.
 - **A take with no frames** contributes a span and its transcript, and the filmstrip is simply not
   rendered when nothing anywhere has frames.
 - **A recording still in `state: 'recording'`** has a growing meta; the timeline redraws on each

@@ -294,7 +294,9 @@ While a walkthrough runs the controls are **on the page**, because that is where
 a glass pill bottom-center reading `[● 2:41] [draw (d)] [clear (c)] [mark (m)] [stop (s)]`. It arrives
 with `{ type: 'recording', active: true, origin, drawStart }` and only opens if `origin` is empty or
 equals `location.origin`, so exactly one tab gets it; `chrome.tabs.onUpdated` re-tells any tab that
-loads mid-walkthrough (which also fires a `nav` keyframe). The four keys are handled by a
+loads mid-walkthrough (which also fires a `nav` keyframe), and `setRecordingActive` re-injects the
+content script into any `http(s)` tab whose listener is dead — an extension reload orphans them, and
+Record is the moment the dock has to exist. The four keys are handled by a
 **window keydown listener installed with the dock** — skipped on any modifier, on `event.repeat`, and
 when the target is an input/textarea/select/contenteditable; keycap first, `event.code` as the layout
 fallback. `Esc` still leaves the ink and is swallowed. `draw` toggles the ink layer (armed from the
@@ -462,8 +464,12 @@ frames get a still, `walkthroughBlocks` renders the `##` sections, `contactSheet
   origin and broadcasts it to *every* tab; only the tab whose `location.origin` matches (or any tab,
   when the origin is empty — a `chrome://` tab was in front) opens the dock. Change one side and either
   every tab grows a toolbar or none does.
-- **Dead tabs need re-injection.** Tabs open at install time have no content script; the worker pings
-  first and falls back to `chrome.scripting.executeScript`.
+- **Dead tabs are revived when a recording starts.** Reloading the extension orphans every open
+  tab's content script — the listener is dead, so the tab would silently lose the dock and the ink
+  with no error anywhere. `setRecordingActive` therefore tries `tellTab` first and, if that fails on
+  an `http(s)` tab, runs `ensureContentScript` (ping → `chrome.scripting.executeScript`) and tells it
+  again. This is the path that regresses as "why can't I draw any more", and it is why you no longer
+  have to reload the page under test after a rebuild.
 - **The directory picker can be refused inside the side panel** on some Chrome builds; the panel
   catches that and offers "Open in tab →", which shares the same IndexedDB.
 - **A `FileSystemDirectoryHandle` can never travel in a `chrome.runtime` message** — messages are

@@ -84,9 +84,11 @@ edit the timeline, get a better prompt — is the point of the whole editor.
 
 - Clicking **Copy prompt for Claude Code** (or `Copy prompt` in the strip) writes, with an absolute
   folder: `Read <folder>\report.md and fix what it describes. It's a gripe I recorded against the
-  running app — N walkthrough parts, in the order they happened. The images are the evidence — read
-  each part's contact sheets before its timeline…`. Without one, it names the report and tells the
-  agent the file opens with its own location.
+  running app — N recordings on one timeline, in the order they happened. The images are the
+  evidence — read the contact sheets first, then the timeline…`. Without one, it names the report and
+  tells the agent the file opens with its own location.
+- **The prompt says "recordings on one timeline", never "parts".** It is the one piece of
+  user-facing text outside the UI itself, and the same copy law applies to it.
 - The take count comes off the live recordings list, not `recCount`.
 - The panel flashes `prompt copied — paste into Claude Code`, or
   `prompt copied — set the folder path for a clean handoff` when the absolute path is still missing.
@@ -138,8 +140,6 @@ in lockstep with `makeGrids`, or the report cites sheets that don't contain what
 - [ ] The credit link points at `https://github.com/dested/gripe` — verify that's the final repo name
       before release.
 - [ ] The report has no place for the user to add overall context ("this is the checkout rewrite").
-- [ ] The prompt still says "walkthrough parts" even though the UI has stopped saying "part". Harmless
-      to the reader, but it is the last surviving instance of the word.
 - [ ] A round of report-shape fixes is specced and unbuilt: fragment merging, text-first pointer lines,
       click/nav frame labels, zero-events honesty (`plans/2026-07-29-transcription-report-fixes.md`).
 
