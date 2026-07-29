@@ -4,6 +4,214 @@
 > Newest first. Entries dated 2026-07-25 were backfilled on 2026-07-26 by reading the shipped code —
 > the reasoning is reconstructed from the code's own comments and structure.
 
+## 2026-07-29 — The screenshot/notes half of the product is deleted; Gripe is recording-only
+**Why:** Sal, verbatim: *"there are no screenshot at a time view anymore. just recording. get rid of
+anythign related to that. its a dead feature."* Notes were the original product and recordings were
+the addition, but the addition ate it: a walkthrough carries the click, the narration, the errors and
+the pointer, and a note carries one still and a sentence. Keeping both meant two capture paths, two
+report shapes, two preamble blocks, an aim overlay with four modes, a composer with dictation and
+auto-commit, and five settings that only made sense to whoever wrote them (*"idk wtf any of thoes
+settings mean. the fuck does stay armed mean"*). All of it is gone: capture modes, the aim chip and
+its four mode buttons, the composer and `SEND_PHRASES`, `capture:visible`, every `note:*` message,
+`arm`/`disarm` and the two `arm-*` manifest commands, `Note`/`NoteDraft`/`CaptureMode`/`Rect`/
+`TargetInfo`/`Viewport`, `Session.noteCount`, `notes.json` and its builder, the notes lane in the
+timeline, and `autoDictate`/`autoSend`/`autoSendMs`/`spotlight`/`chain`. **`Settings` is now
+`{ drawStart, lang }` — one visible switch.** `features/capture-modes.md` and `features/voice-notes.md`
+were deleted with the code; this entry is their tombstone.
+**Rejected:** keeping notes behind a setting (the complaint was the concept, and a second capture path
+is a second everything); a DB migration that drops the `notes` store (the store and its rows are
+harmless, and dropping them means a version bump and an upgrade path for data nobody will read — the
+store stays, unused, and old rows are simply ignored); leaving `notes.json` on disk in existing gripe
+folders (a stale one goes on describing a dead feature to the reading agent, so `writeSummaries`
+deletes it on every rewrite).
+
+## 2026-07-29 — A gripe is ONE timeline: takes are invisible, `tl` is the human's override, and the report follows the edited axis
+**Why:** Sal, verbatim: *"no more of this recording 1 recordfing 2 like its just a timeline… redesign
+the ui to look like a timeline view like after effects, wtih teh transcripts and images at the right
+points, scrobble etc. click, delete, edit, etc. bulk grab them and move them around, dleete section,
+etc. **the whole idae is to sanatize the prompt we send to claude.**"* That last sentence is the
+decision. The report is the product, and the report is only as good as what is in it; a card list lets
+you fix one line at a time, but sanitizing a five-minute ramble needs an editor. So takes are laid
+**end to end on one clock** in `createdAt` order with no gaps (`src/lib/timeline.ts` is the only place
+a position may be computed), the seam is a 1px dashed line with no label, and the words "part", "rec",
+"recording 2" are banned from UI copy — `rec-NN/` survives on disk, where nobody is looking. Moving
+something writes `tl` on that frame or line: an explicit position on the unified axis, absent by
+default, present only when a human dragged it. **The report reads the same positions**, so a deleted
+stretch and a dragged line change what the agent gets — that is the whole loop. Bulk `timeline:move`
+/ `timeline:delete` do it in one write per recording, guarded by `revs`: frames are addressed by
+identity and survive anything, lines are array positions and a Whisper pass replaces the whole array,
+so a stale line op is skipped and the UI says so rather than editing somebody else's words.
+**Rejected:** per-take axes side by side (that is "recording 1 / recording 2" with extra steps, and it
+is the thing being deleted); rewriting `t` in place when something moves (it is the take-local
+timestamp the filenames, `transcript.txt` and `recording.json` are all built from — an override
+alongside it keeps the raw recording truthful and the edit reversible by deleting one field); a
+separate "edited report" file (two artifacts means two things to paste and one of them is always
+stale); letting an unmoved line's frame-claiming window cross a seam (takes abut, so it would claim
+frames recorded hours later — unmoved windows clamp to their own take, moved ones claim globally,
+because a human placing something is the strongest signal in the file).
+
+## 2026-07-29 — The frames lane is a filmstrip of fixed-width cells, not one thumbnail per keyframe
+**Why:** Sal, watching v1 render a real 10:18 recording: *"these videos could be an hour long. this ui
+is terrible. i cannot go to market with this."* He was right, and the cause was structural rather than
+cosmetic: absolutely-positioned fixed-size thumbnails at fit zoom pack 150 frames into 900px, so every
+tile overlaps its neighbours into a card-deck smear, and duration-scaled voice pills shrink to
+unreadable fragments. Any layout that gives each item a fixed size fails at some duration; the only
+question is which. So the track divides into `--cell-w`-wide **cells** and each cell renders the
+keyframe nearest the middle of its own time slice, `object-fit: cover`, edge to edge — no overlap at
+any duration and any zoom, and zooming in refines the slices until a cell is one keyframe. Cells with
+no keyframe within reach render as a visible gap, which is honest: nothing happened there. Past ~300
+cells only the ones near the viewport are built. Voice became blocks whose width is duration, with
+text rendered **only at ≥48px wide**, and the words moved to a full-width **playhead readout** under
+the monitor — scrub, read, click, fix. Marks are instants, so they became ticks on the strip's top
+edge rather than a property of a cell.
+**Rejected:** virtualizing the old thumbnails (the overlap is at fit zoom, where virtualization saves
+nothing); a fixed thumbnail count with "+N more" (an hour of screen recording is exactly the case
+where you need to see the shape of it); making the track scroll horizontally by default instead of
+fitting (fit-to-width is how you find the junk stretch you came to delete); text inside every clip at
+any width (a 6px block with three ellipsised characters is noise, and the readout does the job better).
+
+## 2026-07-29 — The editor is a popup window pinned to the bottom of the browser, not a side panel
+**Why:** Sal: *"what if the timeline view was at the bottom? like you open up the plugin along the wide
+axis and put everything in there."* A timeline is a wide object and the side panel is a 380px rail;
+`chrome.sidePanel` is side-only, with no API to dock anywhere else. So `⧉` opens the same document
+(`sidepanel.html?pop=1`) as a `type: 'popup'` window positioned over the bottom edge of the current
+browser window, and the worker keeps it there — `strip:track` stores `{stripId, parentId}`,
+`windows.onBoundsChanged` re-pins it on every parent move/resize (keeping whatever height the user
+dragged), `onRemoved` closes it with its parent. It is DevTools-docked-to-bottom in feel; it is still a
+popup, so it can be occluded, and that is accepted. This splits the product's two jobs cleanly: **the
+side panel is the capture remote** (Record, the inbox, the prompt, done) and **the strip is the
+editor**. Same page, same IndexedDB, no new state — `?pop=1` swaps the panel chrome for one slim bar
+and `.tl` notices its own box is landscape and moves the monitor to the left.
+**Rejected:** a content-script overlay docked inside the page (it would be captured by the recording it
+exists to edit, and it dies on `chrome://` pages and the Web Store); a full-window tab for editing
+(loses the app you are griping about, which is the thing you are scrubbing against); making the side
+panel wider (Chrome decides that, not us); two components for two shapes (the rail must stay a
+functional editor — the strip is comfort, not a requirement).
+
+## 2026-07-29 — `--max` goes full-bleed for wide-and-short windows
+**Why:** 0.6 capped the content column at 900px and centered it, because a full-bleed 1200px row of
+10.5px metadata was the bug that started the token scale. The dock strip breaks that rule's premise: at
+1500×400 a 900px centered column leaves 600px of empty canvas beside the editor, which costs the strip
+half its usable width for a rule that exists to stop *tall* windows looking sparse. So one media query,
+`(min-width: 1000px) and (max-height: 560px)`, returns `--max` to `100%`. Keying it on the shape rather
+than adding a class means the rail and a normal tab can never accidentally opt in — neither is ever
+that short.
+**Rejected:** a `.pop` class overriding `--max` (the strip is a shape, and a tab dragged to 1500×400
+deserves the same treatment); dropping the cap entirely (it is still right for the 1200px tab, which is
+what it was written for); letting `.tl` opt out of the cap alone (the header and the bar would then be
+narrower than the thing under them, which reads as a rendering bug).
+
+## 2026-07-29 — Keyboard shortcuts come back, but only as labels on the on-page dock
+**Why:** Sal, verbatim: *"i want shortcuts on draw clear mark stop so it should say like draw (d) etc."*
+This **amends** the 2026-07-28 law ("zero keyboard anywhere in the UI"), and the amendment is precise:
+that law was written against a panel that *taught itself with `<kbd>` chips* and hid features behind
+bindings the user had to go find. A key printed on the button it fires is the opposite — it is a label,
+it costs no discoverability, and it is at the exact place the eyes already are. So the dock reads
+`draw (d) · clear (c) · mark (m) · stop (s)` and the **panel and strip stay entirely shortcut-free**.
+The keys are handled by a window listener the content script installs with the dock, because
+**Chrome silently refuses to bind bare letters to manifest commands** — that is the hard-learned part,
+and it is why this can never be tidied into `manifest.json`. Guards came with it: any modifier held,
+`event.repeat`, or an editable target (input/textarea/select/contenteditable, via `composedPath`) skips
+the handler, with `event.code` as a layout fallback so a cyrillic or dvorak keyboard still works.
+Typing `s` in the host page's search box must never stop the recording.
+**Rejected:** manifest commands with modifiers (`Alt+Shift+D` already exists for draw and nobody uses
+it — that is the evidence that a binding you have to discover is a feature nobody has); a tooltip
+carrying the key (a `title` may reward a hover, it may never be where the instruction lives); putting
+the keys in the panel too (the panel is not where your hands are during a walkthrough, and law 6 stands).
+
+## 2026-07-28 — The panel is five things, and the controls moved onto the page
+**Why:** Sal, verbatim: *"Redo the ui. I hate it. It has 50 buttons that don't make sense. Make
+drawing default on and I can turn it off. No more shortcuts at all. My users are not smart."* The
+count was close to literal, and every one of them had been justified on its own. The deeper change is
+the last sentence: this stopped being a tool its author uses and became a product with **users who
+will never read a tooltip, a README, or a `chrome://extensions/shortcuts` page**. Density and
+keyboard-first flows were what failed — a panel that teaches itself with `<kbd>` chips teaches nobody,
+and a feature reachable only by hotkey is a feature that does not exist. So: **the panel is five
+things** — Record, point at something, the timeline, Copy prompt, done — and everything else was
+deleted, folded behind one `settings` disclosure, or moved onto the page. One secondary capture entry
+(`point at something broken`); region/draw/page live on the page's own hint chip as plain word
+buttons, because by then the user is already looking at the page. `.zip` appears only when there is no
+folder to write into. **Drawing is on by default** (`Settings.drawStart`, default `true`) and the
+recording controls sit on the page in a floating pill — clock · draw/click · clear · mark · stop —
+scoped to the recorded tab by the `recordingOrigin` kv; the panel HUD shrinks to status plus Stop and
+one line saying where the rest went. **Zero shortcut mentions anywhere**: no `<kbd>` in either
+stylesheet, no key names in copy, no `chrome.commands.getAll` lookup, no "set one" link, and the
+overlay's `esc` chip became a `✕` button. The four manifest commands and the in-page `e/r/d/p`, `c`
+and `Esc` keys stay wired and silent, for whoever already learned them.
+**Rejected:** keyboard-first flows in general (correct for an expert tool, wrong for this one — the
+keyboard is now a shortcut in the literal sense: a faster path to something already clickable); the
+four-mode row in the panel (the page's aim chip already offers all four at the moment they're
+relevant, and having both is the fifty-buttons problem in miniature); drawing behind a hotkey (that
+is how it shipped in the rethink hours earlier, and it made a real feature dead to anyone who doesn't
+read docs — this reverses that part of the 2026-07-28 live-drawing decision below, and only that
+part); deleting the `.zip` fallback outright (it is the entire no-File-System-Access path, so it stays
+— just conditional, invisible to anyone with a folder connected).
+
+## 2026-07-28 — A gripe is a container of parts — recording again appends, and `kind: 'recording'` dies
+**Why:** Sal recorded a walkthrough, stopped, hit Record again — and the panel switched to a
+brand-new gripe. Part 1 looked destroyed. That is `stopRecording` → `recording:add` minting a session
+per recording, and it is the direct consequence of the 2026-07-26 decision below ("a recording is a
+`Session` kind"). The deeper problem is that one-recording-per-gripe splits the handoff: a five-minute
+ramble in three takes became three folders, three `report.md`s, and three prompts to paste, when the
+agent wants one. So a **gripe is now a container**: `recording:start` reuses the open session and takes
+`session.recCount + 1` as the part index, notes and parts interleave by `createdAt` in one timeline and
+one report, and only `done` closes a gripe. **This partially reverses "a recording is a `Session` kind,
+not a new store"** — the store exists now (`recordings`, indexed `bySession`), `Session` loses `kind`
+and `recording` and gains `recCount`, and `DB_NAME` finally takes a version bump to 2. The migration
+lifts every old walkthrough session into a part of itself **keeping the session's id as the recording
+id**, which is what makes every `<id>:frame:<n>` and `<id>:video` blob already on disk still resolve —
+it reads like a copy-paste bug and it is load-bearing. What survives from the old decision is its real
+insight: parts still reuse the whole session pipeline (switcher, rename, delete-cascade, flush, zip,
+copy-prompt), and the raw webm is still always kept.
+**Rejected:** pause/resume on one recording instead of parts (floated, and Sal chose parts — pausing
+gives you one video with invisible seams; parts give you a report that says "Part 2" where he stopped
+to think, which is information); renumbering parts when one is deleted (same rule as notes: `recCount`
+only ever climbs, deleting part 2 leaves `rec-01`/`rec-03` and the report says so — renumbering would
+invalidate paths in a report an agent may already be reading).
+
+## 2026-07-28 — The one folder is a global gripe inbox, and the prompt carries an absolute path
+**Why:** "the whole folder flow sucks", and underneath it: *"i have no idea where im going to go…
+every time i go searching."* The 0.6 decision below got the count right (one folder) but kept framing
+it as **the repo you're in** — and the cost it explicitly accepted, "re-picking a folder when you
+change repos", is exactly what Sal hit, over and over, because this tool is how he reports bugs across
+every project he has. So the framing changes, **amending the 2026-07-26 one-folder decision with Sal's
+explicit sanction**: the one folder is a *global inbox*. Gripes land there no matter which app you were
+ranting at, you pick it once, you type its absolute path once, and every prompt is a complete
+instruction from any repo — `Read G:\code\gripes\<slug>\report.md and fix what it describes.` Nothing
+about the storage changed (`projectDir`/`projectPath` are frozen identifiers, zero migration); what
+changed is that the panel calls it the inbox, the empty state says `no inbox yet — gripes have nowhere
+to land`, and the absolute path stopped being a nicety for the report header and became the mechanism.
+One rule fell out of it: point the inbox at a folder already called `gripes` and the `gripes/` level is
+skipped, because `G:\code\gripes\gripes\<slug>` is nobody's idea of a path.
+**Rejected:** a native-messaging daemon that could hand the agent a real path (installation burden on
+every machine, to learn one string the user can type in four seconds); a per-project folder list (that
+is 0.5, it shipped, it was hated on sight, and it was reverted the same day — see below); auto-deriving
+the absolute path from the directory handle (the File System Access API does not expose it, by design,
+and this is the third decision to say so).
+
+## 2026-07-28 — Live drawing and click ripples happen in the tab; recorder resilience happens in IndexedDB
+**Why:** "I should be able to draw while recording." Drawing *anywhere on screen* is not a thing a
+Chrome extension can do — there is no system-level overlay — so the honest version is an ink layer
+inside the page: a full-viewport canvas in the content script's shadow root, `Alt+Shift+D` to toggle,
+`c` to clear, `Esc` to leave. It is captured for exactly one reason, which is that it is on screen.
+Because the drawn state would otherwise read as "the same screen" to a 64×64 dedup, every stroke end
+sends `recording:mark` and force-marks a keyframe — a circle around the broken thing is worth more
+than the frame it's drawn on. The same logic produced click ripples: a click leaves no trace in a
+screen recording (the cursor doesn't even render in some capture paths), so every `pointerdown` while
+recording spawns a 350ms accent ring. Neither touches the capture pipeline. The resilience half is the
+same instinct pointed at the other failure Sal could hit: the recorder lived in panel memory until
+Stop, so closing the panel mid-ramble lost everything. Now every 1s webm chunk is written to
+`<id>:chunk:<n>` as it arrives and a throttled (≥1500ms) `recording:progress` pushes the meta to the
+worker, so a dead panel costs about a second; the next load finds the orphaned part, reassembles it,
+and tags it `interrupted` rather than pretending it is whole. Whisper became a FIFO in the same pass —
+back-to-back parts made the old single-slot guard silently drop the second transcript.
+**Rejected:** a system-level overlay app for real screen-wide drawing (that is not a Chrome extension
+anymore, and the install burden buys one gesture); OffscreenCanvas or a worker to keep recording alive
+without the panel (MediaRecorder has to live where `getDisplayMedia` was granted, which is the panel
+document — chunks in IndexedDB are the achievable 95%); broadcasting on `recording:progress` (it fires
+every couple of seconds and the panel already holds the live meta — a re-render per push would be a
+performance bug written into the protocol).
+
 ## 2026-07-26 — One gripe folder, reverting the per-project list; and the panel scales with its width
 **Why:** the per-project folder list shipped in 0.5 and Sal hated it on sight — "forget all that,
 forget folders, there's only one gripe folder." He is right: it turned a thing you set once into a

@@ -2,6 +2,88 @@
 
 > Terse log of every task: what was asked → what was done. Newest first.
 
+## 2026-07-29 — a gripe is one timeline: notes deleted, an NLE editor, a bottom strip
+Asked: "no more of this recording 1 recordfing 2 like its just a timeline… redesign the ui to look like
+a timeline view like after effects… the whole idae is to sanatize the prompt we send to claude", plus
+"there are no screenshot at a time view anymore. just recording. get rid of anythign related to that",
+"i want shortcuts on draw clear mark stop so it should say like draw (d)", "i want the drawings to fade
+out over time slowly", "i also need the chrome plugin to be able to pop out somehow" — then, on a real
+10:18 recording: "these videos could be an hour long. this ui is terrible." Done (plan:
+`plans/2026-07-29-timeline.md`, three addendums). **Notes are dead**: capture modes, aim overlay,
+composer, `note:*`/`arm`/`capture:visible`, Note/CaptureMode/TargetInfo, `noteCount`, notes.json and
+the two `arm-*` commands all deleted; `Settings` is `{drawStart, lang}` with one switch; the `notes`
+store stays unused and `writeSummaries` scrubs leftover `notes.json`. **One axis**: new
+`src/lib/timeline.ts` is the sole position authority (takes end to end, `tl` overrides what a human
+moved), `timeline:move`/`timeline:delete` do bulk edits behind a `revs` guard against the Whisper-swap
+race, and `buildReport` now emits one chronological walkthrough from those same positions — so deleting
+a stretch deletes it from the handoff. **New `Timeline.tsx`**, rebuilt once mid-day: **filmstrip** of
+fixed-width cells (no overlap at any duration, windowed past ~300), duration-sized voice blocks with
+text only ≥48px, a clickable playhead readout under the monitor, time-range-first selection, marks as
+ticks, `.wide` landscape shape. **The editor pops out** as a strip pinned across the bottom of the
+browser window (`?pop=1` + `strip:track`; the worker re-pins on parent move/resize) — panel = capture
+remote, strip = editor; `--max` goes full-bleed at wide-and-short. **Dock buttons carry their keys**
+(`draw (d) · clear (c) · mark (m) · stop (s)`, content-script listener — chrome refuses bare-letter
+commands) and **ink fades** (3s hold, 4s fade, any stroke restores all). Recorder gained click/nav/15s
+heartbeat forced keyframes. Preview harness: `rec|long|empty|nofolder` + `WxH` shape tokens.
+Typecheck + both builds clean; checked at 380/560/900 and 1500×400 on the `long` seed.
+Touched: types/messages/timeline(new)/markdown/fs (lib), background, content/index+ui, App.tsx,
+Timeline.tsx (new), styles.css, recorder.ts, manifest, scripts/preview*, ui/cliffnotes/decisions,
+features (+timeline, −capture-modes, −voice-notes, 5 rewritten), plans/2026-07-29-timeline.md.
+
+## 2026-07-29 — forced keyframes (package A of the walkthrough-quality fixes)
+Asked: an agent read a real 10-min bundle (`gripes/2026-07-29-1009-walkthrough`) and found a 78s
+keyframe gap over the most-narrated stretch (cream-on-cream nav + form typing stays under the 8-cell
+dedup bar), plus a shipped Web Speech transcript and report noise; "fix all of those things". Done
+(capture only): `RecordingFrame.reason` grew `click | nav | beat`; clicks (ripple condition) and
+navigations (`gripe:page-nav` MAIN-world tap: pushState/replaceState/popstate/hashchange + fresh-load
+catch-up) send `recording:force`; the recorder forces in-scope keyframes with a 1200ms click cooldown
+(mark wins, `minDist === 0` skipped) and keeps a `beat` frame when the screen drifts below the bar
+for >15s. Thinning still protects only marks. Packages B (transcription: live chunked Whisper, done
+guard, reopen-requeue, vocabulary) and C (report shape) are specced and NOT started —
+`plans/2026-07-29-transcription-report-fixes.md`.
+
+## 2026-07-28 — UI redo: five things, zero shortcuts, ink by default
+Asked: "Redo the ui. I hate it. It has 50 buttons that don't make sense. Make drawing default on and I
+can turn it off. No more shortcuts at all. My users are not smart. Go hard." Done (plan:
+`plans/2026-07-28-ui-redo.md`). **The panel is five things** — Record, point at something, the
+timeline, Copy prompt, done: the four mode buttons, the shortcut hint line, `chrome.commands.getAll`,
+`editShortcut`, every `<kbd>` and the E/R/D/P key relay are gone (only `Escape` → disarm survives), the
+hero Record control is full width and `--hero-h` tall (52/60/68), one secondary entry reads
+`point at something broken`, the inbox collapses to a single clickable line (setup card when
+unconnected), the switcher chevron became `history · N`, five toggles hide behind one `settings` row,
+and `.zip` renders only when no folder is connected. **The controls moved onto the page**: recording
+raises a glass `.dock` on the recorded tab — clock · draw/click · clear · mark · stop — scoped by the
+new `recordingOrigin` kv, re-sent to tabs that load mid-walkthrough, fading to .35 near the cursor and
+stepping aside while a capture is armed; the new `recording:stop` Request lets it stop the recorder the
+panel owns. **Drawing starts armed** (`Settings.drawStart`, default true); toggling it off returns
+clicks to the page without erasing strokes, and the button's label swaps `draw` ⇄ `click`. Overlay
+de-shortcutted too: modes are plain words, `esc` is now a `✕`, the composer got a `save` button.
+Manifest commands stay wired and unadvertised. Typecheck + both builds clean; panel checked at
+380/560/900 in all five preview modes. Touched: content/index+ui, App.tsx, styles.css, types/messages,
+background, scripts/preview*, ui/cliffnotes/decisions/features×2, plans/2026-07-28-ui-redo.md.
+
+## 2026-07-28 — the rethink: one gripe, many parts, one inbox (0.7.0)
+Asked: Sal recorded a walkthrough, stopped, hit Record again — and the panel switched to a new gripe,
+making part 1 look destroyed. Plus "the whole folder flow sucks", "I need a full path in the prompt",
+"I should be able to draw while recording". Done, as a full rethink (plan:
+`plans/2026-07-28-rethink.md`). **A gripe is a container**: recording again appends a **part** to the
+open gripe, notes and parts interleave by `createdAt` in one timeline and **one `report.md`**, and only
+`done` closes it. `kind: 'recording'` is dead — parts live in a new `recordings` store (**DB v2**, and
+the migration keeps `recording.id === the old session id` so every existing frame/video blob still
+resolves); `Session` gains `recCount`, each part owns a `rec-NN/` subtree on disk. **The one folder is
+now the gripe inbox** — global, not per-repo; picked once, its absolute path typed once, and every
+prompt carries it so any repo's agent can read the report (the `gripes/` level is skipped when the
+inbox is itself named `gripes`). **Recorder resilience**: every 1s webm chunk is persisted plus a
+throttled meta push, so a dead panel loses ~1s instead of the ramble; the orphan is recovered on next
+load and tagged `interrupted`. **Whisper is a FIFO** — back-to-back parts used to drop the second
+transcript silently. **`Alt+Shift+D` draws on the page** while recording (in-tab ink layer, stroke end
+force-marks a keyframe) and clicks leave accent ripples. **Panel redesign**: hero Record + live HUD,
+inbox line, one chronological timeline of note rows and part cards. Typecheck + both builds clean;
+panel checked at 380/560/900 via `npm run preview` (`mode=mixed`). Landing site deliberately deferred.
+Touched: types/db/messages/fs/markdown/format (lib), background, content/index+ui, recorder.ts,
+App.tsx, styles.css, scripts/preview*, manifest+package (0.7.0), cliffnotes/ui/decisions/features×2,
+plans/2026-07-28-rethink.md.
+
 ## 2026-07-26 — revert the folder list, rescale the panel (0.6.0)
 Asked: "ooh i kinda hate it. forget all that. forget folders. theres only one gripe folder. you name
 it how you want." — plus a screenshot at ~1200px wide: "the ui is so small and clunky. rethink it a

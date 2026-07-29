@@ -1,18 +1,28 @@
 # Gripe — CliffNotes
 
 > Living map of the project. Read this before any coding session.
-> Last updated: 2026-07-26 (0.6.0). Visual language → `ui.md` · specs → `features/` · why → `decisions.md`
+> Last updated: 2026-07-29 (0.7.0, after the timeline). Visual language → `ui.md` · specs →
+> `features/` · why → `decisions.md`
 
 ## What this is
 
-A Chrome MV3 extension that turns "click the broken thing and talk about it" into a folder of
-markdown + screenshots your coding agent can read. Hotkey → pick an element → dictate → the note
-commits itself on silence, and the whole session is written straight into your repo via the File
-System Access API. The unusual part: `report.md` is authored **for a model, not a human**, and each
-note carries the console/network errors that fired at that exact moment.
+A Chrome MV3 extension that turns "let me just show you what's broken" into a folder of markdown +
+keyframes your coding agent can read. Hit **Record**, talk through the app while it captures your
+screen, and draw on the page from a toolbar that rides along with it. Stop, think, hit Record again
+and it keeps going on the same clock — **a gripe is one timeline**, not a list of recordings, and only
+`done` closes it. Afterwards you pop the editor out along the bottom of the window and *sanitize* it:
+scrub, read what you said, fix a word, grab a junk stretch and delete it, drag something to where it
+belongs. Everything writes through the File System Access API into **one folder, the gripe inbox**:
+picked once, its absolute path typed once, and carried by every prompt so an agent running in any repo
+can read it. The unusual part: `report.md` is authored **for a model, not a human**, it follows the
+edited axis rather than the raw recording, and it carries the console/network errors that fired while
+you were talking.
 
-Repo directory is `gripe`, matching the product name. Legacy `chrome-bug-recorder` names survive in
-a few identifiers on purpose (see Gotchas).
+**Gripe records. That is all it does.** The screenshot/element-picker half of the product was deleted
+on 2026-07-29 (decisions.md) — there is no capture mode, no composer, no note.
+
+Repo directory is `gripe`, matching the product name. Legacy `chrome-bug-recorder` names survive in a
+few identifiers on purpose (see Gotchas).
 
 ## Quick Reference
 
@@ -21,9 +31,14 @@ a few identifiers on purpose (see Gotchas).
 - **Type-check:** `npm run typecheck` (`tsc --noEmit`) — the only automated check in the repo
 - **Load it:** `chrome://extensions` → Developer mode → Load unpacked → `dist/`
 - **No test runner, no linter, no CI.**
-- **Output lands in** `<the one connected folder>/gripes/<YYYY-MM-DD-HHMM>-<slug>/`
+- **Output lands in** `<inbox>/gripes/<YYYY-MM-DD-HHMM>-<slug>/` — one folder per gripe: `report.md`
+  and `MANIFEST.txt` at its root, one `rec-NN/` subtree per take. The `gripes/` level is **skipped**
+  when the inbox folder is itself named `gripes` (nobody wants `gripes/gripes/`).
 - **Look at the panel without Chrome:** `npm run build && npm run preview` →
-  `localhost:8777/gallery.html?w=380,560,900` (stubbed chrome APIs, one iframe per width)
+  `localhost:8777/gallery.html?w=380,560,900&mode=rec` (stubbed chrome APIs, one iframe per width).
+  Modes: `rec | long | empty | nofolder`. A `w` token may be `900` or a **shape**, `1500x400` — a
+  shape gets its own height and renders popped, which is the only way to see the dock strip.
+  **`mode=long` (10:18, two takes, 150 frames) is the acceptance seed for anything timeline-shaped.**
 - **One accent color, everywhere:** `#ff5c39` (`ACCENT` in `src/lib/types.ts`)
 - **Landing site:** `landing/` → https://gripe.dested.com — `cd landing && bun run dev` (:3000),
   deployed by Drydock (rootDir `landing`) on every push to main. Promo video:
@@ -39,7 +54,7 @@ a few identifiers on purpose (see Gotchas).
 | Language | TypeScript 5.7, `strict` | `noUnusedLocals`, `noUnusedParameters` on |
 | Side panel UI | React 19 + plain CSS | Runtime deps: React + transformers.js only |
 | Content script UI | Hand-built DOM in a shadow root | No framework — it boots on every page |
-| Persistence | IndexedDB (`bug-recorder`, v1) | Sessions, notes, image blobs, kv |
+| Persistence | IndexedDB (`bug-recorder`, v2) | Sessions, recordings, image/video blobs, kv |
 | Disk writes | File System Access API | Directory handle stashed in IndexedDB |
 | Speech | Web Speech API (`webkitSpeechRecognition`) | Live ticker only; Whisper owns the shipped transcript |
 | Transcription | transformers.js + whisper-small.en (q8) | Post-stop, in a worker; wasm from `public/ort/`, model cached from HF on first use |
@@ -49,49 +64,55 @@ a few identifiers on purpose (see Gotchas).
 
 ```
 public/
-  manifest.json         MV3 manifest: permissions, commands, side_panel, content_scripts
-  injected.js           MAIN-world tap on console/fetch/XHR (plain JS, copied verbatim)
+  manifest.json         MV3 manifest: permissions, two commands, side_panel, content_scripts
+  injected.js           MAIN-world tap on console/fetch/XHR + SPA navigations (plain JS, verbatim)
+  micperm.html/.js      Mic permission page — a side panel can't render getUserMedia's prompt
   icons/                Generated by scripts/make-icons.mjs — gitignored
   ort/                  onnxruntime wasm staged by scripts/copy-ort.mjs — gitignored
 scripts/
   make-icons.mjs        Zero-dep PNG encoder; draws the reticle mark at 16/32/48/128
   copy-ort.mjs          Stages the ort asyncify wasm pair into public/ort/ (MV3: no remote code)
   preview.mjs           Zero-dep static server for the panel-layout harness (npm run preview)
-  preview/              gallery.html (iframe per width) + preview.html (stubbed chrome + seeded IDB)
-sidepanel.html          Side panel document; Vite entry for the React app
+  preview/              gallery.html (one iframe per width/shape) + preview.html (stubbed chrome,
+                        seeded IDB: rec | long | empty | nofolder)
+sidepanel.html          Side panel document; also the popped editor strip (?pop=1). Vite entry.
 src/
   background/
-    index.ts            Service worker: hotkeys, tab capture, IndexedDB writes, message router
+    index.ts            Service worker: two hotkeys, IndexedDB writes, message router, strip docking
   content/
-    index.ts            The capture state machine — arming, picking, composer, save. Start here.
-    ui.ts               Shadow-DOM overlay: CSS + DOM construction, returns element handles
-    capture.ts          Screenshot compositing: spotlight, box, ink strokes, upscaled crop
-    speech.ts           Dictation class over Web Speech, auto-restarting
+    index.ts            Everything a walkthrough looks like from inside the page: telemetry relay,
+                        pointer trail, click ripples, the ink layer and its fade, the dock and the
+                        four keys its labels advertise. Nothing here exists outside a recording.
+    ui.ts               Shadow-DOM overlay: CSS + DOM construction (dock, ink canvas, ripple)
+    speech.ts           Dictation class over Web Speech, auto-restarting — the recorder's live ticker
   lib/
-    types.ts            Note/Session/Settings/TargetInfo + ACCENT + SEND_PHRASES
+    types.ts            Recording/Session/Settings/TimelineRef + ACCENT + grid constants
     messages.ts         Typed message unions across all three contexts + send()
-    db.ts               IndexedDB wrapper: sessions, notes, blobs, kv
-    fs.ts               File System Access: pick/remember dir, permissions, writeSession
-    markdown.ts         Builds report.md, notes.json, and the paste-into-Claude prompt
+    db.ts               IndexedDB wrapper: sessions, recordings, blobs, kv (+ the v1→v2 migration)
+    timeline.ts         **The position authority.** Takes → spans on one axis; linePos/framePos
+    fs.ts               File System Access: pick/remember the inbox, permissions, writeRecording
+    markdown.ts         report.md, transcript.txt, recording.json, MANIFEST.txt, the paste prompt
     format.ts           slug/stamp/time/url string helpers
     zip.ts              Store-only ZIP writer + CRC32
   sidepanel/
     main.tsx            React root
-    App.tsx             The entire side panel UI and its state
-    recorder.ts         Screen-recording distiller: getDisplayMedia + 64×64 cell-count dedup + dictation
+    App.tsx             The panel and the strip: state, the flush effect, the Whisper queue,
+                        interrupted-take recovery, pop-out. Renders one <Timeline/>.
+    Timeline.tsx        **The editor.** Monitor, playhead readout, ruler, filmstrip, voice lane,
+                        selection, zoom — in two shapes (stacked rail / landscape strip)
+    recorder.ts         Screen-recording distiller: getDisplayMedia + 64×64 cell-count dedup +
+                        forced keyframes + dictation, persisting 1s chunks and throttled meta
     grids.ts            3×3 contact sheets (claude-real-video make_grids port)
-    transcribe.ts       Post-stop Whisper pass, main-thread half: decode webm audio → worker → segments
+    transcribe.ts       Post-stop Whisper pass, main-thread half: decode webm audio → worker
     transcribeWorker.ts transformers.js + whisper-small.en q8 in a module worker (webgpu→wasm)
-    styles.css          Side panel styles — type/space token scale at :root, stepped at 480/760px
+    styles.css          Panel styles — token scale at :root, stepped at 480/760px, plus .tl.wide
 docs/hero.svg           README hero illustration
 vite.config.ts          Build 1: sidepanel + background (ESM, emptyOutDir: true)
 vite.content.config.ts  Build 2: content script (IIFE, emptyOutDir: false)
 landing/                Marketing site → gripe.dested.com (own package.json, Bun)
   server.ts             Express 5 + Vite SSR entry (ported from dested/sal-starter)
-  src/app/home.tsx      The whole landing page; components/capture-demo.tsx (looping CSS hero
-                        capture) + components/recorder-demo.tsx (scripted walkthrough
-                        "distillation machine": sampler → dedup → grid → whisper pass)
-  src/styles/app.css    Tailwind v4 tokens mirroring ui.md (+ demo.css / recorder.css timelines)
+  src/app/home.tsx      The whole landing page + components/ (CSS hero demo, recorder demo)
+  src/styles/app.css    Tailwind v4 tokens mirroring ui.md
   public/promo.mp4      60s promo — rendered artifact, replace with a real recording anytime
   video/                Remotion project that renders promo.mp4 (bun run render, own deps)
 Dockerfile              Generated by Drydock — arm64 bun SSR image from ./landing
@@ -103,30 +124,36 @@ drydock.yaml            Drydock deploy manifest (portal is source of truth; do n
 
 | Concept / task | Location |
 | --- | --- |
-| Capture flow, modes, keys, autosave | `src/content/index.ts` |
-| Overlay markup + overlay CSS | `src/content/ui.ts` (CSS is a template string at the top) |
-| Screenshot look (spotlight, box, crop) | `src/content/capture.ts` |
-| Dictation, send-on-silence plumbing | `src/content/speech.ts` + `scheduleAutoSend` in `content/index.ts` |
-| Voice commit phrases ("save it") | `SEND_PHRASES` in `src/lib/types.ts` |
-| Hotkeys / commands | `public/manifest.json` `commands` + listener in `src/background/index.ts` |
+| Where anything sits on the gripe's clock | `src/lib/timeline.ts` — **nothing else may compute a position** |
+| The editor: scrub, select, move, delete, edit | `src/sidepanel/Timeline.tsx` |
+| Filmstrip cell sizing / windowing | the `cells` memo in `Timeline.tsx` + `--cell-w` in `styles.css` |
+| Stacked vs landscape shape | the `measure` callback in `Timeline.tsx` + `.tl.wide` in `styles.css` |
+| Popping the editor out, and keeping it docked | `popOut` in `App.tsx` + `strip:track` / `onBoundsChanged` / `onRemoved` in `src/background/index.ts` |
+| The on-page dock, its four keys, ink and ripples | `src/content/index.ts` (`DOCK_KEYS`, `onDockKey`, `wireLive`, `ripple`) |
+| Dock markup + overlay CSS | `src/content/ui.ts` (CSS is a template string at the top) |
+| Ink fade timings | `INK_HOLD_MS` / `INK_FADE_MS` / `inkAlpha` in `src/content/index.ts` |
+| Scoping the dock to the recorded tab | `RECORDING_ORIGIN` kv + `setRecordingActive` in `src/background/index.ts` |
 | Message protocol | `src/lib/messages.ts` (add to `Request`, then handle in the background switch) |
-| What a note stores | `Note` / `NoteDraft` in `src/lib/types.ts` |
-| Report wording and layout | `src/lib/markdown.ts` (`PREAMBLE`, `buildReport`) |
+| Bulk move / delete on the timeline | `timeline:move` / `timeline:delete` in `src/background/index.ts` |
+| What a take stores | `Recording` / `RecordingMeta` / `RecordingFrame` in `src/lib/types.ts` |
+| Report wording and layout | `src/lib/markdown.ts` (`PREAMBLE_*`, `buildReport`) |
 | Folder writing / permissions | `src/lib/fs.ts` |
-| Side panel UI + settings toggles | `src/sidepanel/App.tsx` |
-| The gripe folder (pick, remember, permissions) | `src/lib/fs.ts` + the folder line in `App.tsx` |
-| Closing a gripe (write → copy → close) | `finish()` in `App.tsx` + `session:close` in `src/background/index.ts` |
-| Panel type scale / responsive layout | the token block at the top of `src/sidepanel/styles.css` |
+| Side panel shell, strip bar, settings | `src/sidepanel/App.tsx` |
+| The gripe inbox (pick, remember, permissions, nesting rule) | `src/lib/fs.ts` + the inbox line in `App.tsx` |
+| Closing a gripe (write → copy → close) | `finish()` in `App.tsx` + `session:close` in `background/index.ts` |
+| Panel type scale / responsive layout / timeline tokens | the `:root` block at the top of `src/sidepanel/styles.css` |
 | Panel layout harness (no extension needed) | `scripts/preview.mjs` + `scripts/preview/*.html` |
-| Panel design tokens | `src/sidepanel/styles.css` `:root` |
-| Console/network capture | `public/injected.js` |
-| Permissions, icons, manifest | `public/manifest.json` |
-| Video walkthrough: capture, dedup, thinning, marks, pointer | `src/sidepanel/recorder.ts` |
-| Absolute folder path (ask once, resolve) | `loadProjectPath`/`sessionFolder` in `src/lib/fs.ts` |
+| Console/network capture + SPA nav tap | `public/injected.js` |
+| Permissions, icons, the two commands | `public/manifest.json` |
+| Capture, dedup, forced keyframes, marks, pointer | `src/sidepanel/recorder.ts` |
+| Chunk persistence + progress pushes (a dead panel loses ~1s) | `ondataavailable`/`saveProgress` in `recorder.ts` |
+| Recovering an interrupted take | the recovery effect in `App.tsx` + `recording:recover` in `background/index.ts` |
+| Whisper queue (takes wait their turn, none dropped) | `enqueueWhisper`/`runWhisper` in `src/sidepanel/App.tsx` |
+| Whether recording starts with ink armed | `Settings.drawStart` (default `true`) → the `recording` command → `openDock` |
+| Absolute inbox path (ask once, resolve) | `loadProjectPath`/`sessionFolder` in `src/lib/fs.ts` |
 | Walkthrough transcription (on-device Whisper) | `src/sidepanel/transcribe.ts` + `transcribeWorker.ts` |
-| Walkthrough contact sheets | `src/sidepanel/grids.ts` |
-| Walkthrough report / MANIFEST / recording.json | `src/lib/markdown.ts` (`buildRecordingReport`…) |
-| Walkthrough disk layout | `writeRecordingSession` in `src/lib/fs.ts` |
+| Contact sheets | `src/sidepanel/grids.ts` |
+| A take's `rec-NN/` disk layout | `writeRecording` in `src/lib/fs.ts` (`recDirName` in `format.ts`) |
 
 ## Surfaces & entry points
 
@@ -134,145 +161,231 @@ An extension has no URLs; it has surfaces. This is the equivalent map.
 
 | Surface | Entry | Built to | Notes |
 | --- | --- | --- | --- |
-| Side panel | `sidepanel.html` → `src/sidepanel/main.tsx` | `dist/sidepanel.html` + `sidepanel.js` | Opens on toolbar-icon click |
+| Side panel (the remote) | `sidepanel.html` → `src/sidepanel/main.tsx` | `dist/sidepanel.html` + `sidepanel.js` | Opens on toolbar-icon click |
+| Editor strip (the editor) | `sidepanel.html?pop=1` | same bundle | A popup window pinned across the bottom of the current browser window. Same document, same IndexedDB; `pop=1` renders the slim bar + timeline only |
 | Service worker | `src/background/index.ts` | `dist/background.js` | ESM module worker |
 | Content script | `src/content/index.ts` | `dist/content.js` | IIFE, `<all_urls>`, `document_idle` |
 | MAIN-world tap | `public/injected.js` | `dist/injected.js` | Web-accessible; injected by the content script |
+| Mic permission page | `public/micperm.html` | copied verbatim | Opened in a tab — a side panel can't show getUserMedia's prompt |
 | Panel-in-a-tab fallback | `chrome-extension://<id>/sidepanel.html` | same bundle | Used when the panel can't open the directory picker |
 
-**Commands** (`manifest.json` → rebindable at `chrome://extensions/shortcuts`):
-`arm-element` (`Alt+Shift+B`), `arm-page` (`Alt+Shift+N`), and `mark-frame` (`Alt+Shift+M`, marks a
-keyframe while a walkthrough records — the worker relays it to the panel, which owns the recorder).
+**Commands** (`manifest.json` → rebindable at `chrome://extensions/shortcuts`): `mark-frame`
+(`Alt+Shift+M`, forces a keyframe — the worker relays it to the panel, which owns the recorder) and
+`draw-live` (`Alt+Shift+D`, toggles the ink layer — the worker relays it to the *tab*, because the
+strokes live in the page). Both are deliberately unadvertised and both have labeled buttons on the
+dock. **The dock's own keys (`d`/`c`/`m`/`s`) are NOT commands** — see Gotchas.
 
 ## Architecture
 
 Three contexts, one store, one direction of travel.
 
 ```
-content script ──┬─ shadow-DOM overlay: picker, marquee, ink canvas, composer
-                 ├─ Web Speech dictation, restarted through silences
-                 └─ composites the capture: spotlight + box + strokes + crop
+content script ──┬─ shadow-DOM overlay: the dock, the ink canvas, click ripples
+                 ├─ four dock keys (d/c/m/s), handled here and only while the dock is up
+                 ├─ console/network + SPA-nav relay, pointer trail
+                 └─ recording:force on clicks and navigations
         │  chrome.runtime.sendMessage
         ▼
-background SW ───┬─ chrome.tabs.captureVisibleTab (background-only API)
-                 ├─ IndexedDB: sessions, notes, image blobs
+background SW ───┬─ two hotkeys, tab fan-out, strip re-pinning
+                 ├─ IndexedDB: sessions, recordings, blobs, kv
                  └─ broadcasts {type:'state:changed'} after every mutation
         │
         ▼
 side panel ──────┬─ React view over that state (re-pulls on every broadcast)
-                 └─ File System Access: writes straight into your repo
+   / strip       ├─ owns the recorder (getDisplayMedia lives where it was granted)
+                 └─ File System Access: writes straight into the inbox folder
 ```
 
-The background worker is the only always-available context, so it owns hotkeys, tab capture (that
-API is background-only), and every write to IndexedDB. The panel is a **pure view** — it never
-mutates state directly; it sends a `Request` and waits for the broadcast. That's why notes recorded
-with the panel closed still land: they flush to disk the next time the panel opens and sees
-`written: false` notes.
+The background worker is the only always-available context, so it owns hotkeys, the reach into every
+tab, and every write to IndexedDB. The panel is a **pure view** — it never mutates state directly; it
+sends a `Request` and waits for the broadcast. It does own two things the worker can't have: the
+`MediaRecorder` (the display-media grant belongs to the document that asked) and the directory handle
+(a `FileSystemDirectoryHandle` can't survive a `sendMessage` hop).
 
 ## Key types
 
 | Type | Where | Purpose |
 | --- | --- | --- |
-| `CaptureMode` | `lib/types.ts` | `'element' \| 'region' \| 'draw' \| 'page'` — drives every branch in the content script |
-| `NoteDraft` | `lib/types.ts` | What the content script hands over; images are data URLs at this point |
-| `Note` | `lib/types.ts` | The persisted record; images become blob keys, `written` tracks disk state |
-| `TargetInfo` | `lib/types.ts` | Selector, tag, text, interesting attrs, opening HTML, box — the agent-facing description |
-| `PageEvent` | `lib/types.ts` | One console/network line with `ts`, matched to a note by time window |
-| `Session` | `lib/types.ts` | Named bucket of notes; `slug` **is** the folder name, `closed` means handed off. `kind: 'recording'` + `recording: RecordingMeta` make it a walkthrough |
-| `RecordingMeta` / `RecordingFrame` | `lib/types.ts` | A walkthrough: timed keyframes (with dedup `dist`), transcript segments, events, webm ref |
-| `Settings` | `lib/types.ts` | `autoDictate`, `spotlight`, `chain`, `autoSend`, `autoSendMs`, `lang` |
+| `Session` | `lib/types.ts` | One gripe: `slug` **is** the folder name, `closed` means handed off, `recCount` sources the next take index |
+| `Recording` | `lib/types.ts` | One take: `index` (names `rec-NN/`), `state: 'recording' \| 'done'`, `interrupted?`, `mime`/`chunks` (recovery), and its `meta` |
+| `RecordingMeta` | `lib/types.ts` | A take's contents: keyframes, transcript, events, `rev`, `reviewed`, `written` |
+| `RecordingFrame` | `lib/types.ts` | One keyframe: `t`, `file`, `reason` (`start\|change\|mark\|click\|nav\|beat`), dedup `dist`, `pointer`, and `tl` |
+| `TranscriptSegment` | `lib/types.ts` | One spoken line: `t`, optional `d` (duration), `text`, and `tl` |
+| `tl` (on frames and lines) | `lib/types.ts` | **The human override.** ms on the gripe's unified axis; absent means "computed from `t`". Set only when someone dragged it |
+| `TimelineRef` / `TimelineMove` | `lib/types.ts` | How the store finds an item again: `{kind:'frame'\|'line', recId, index}` (+ `tl` for a move) |
+| `PartSpan` | `lib/timeline.ts` | A take's stretch of the axis — `{rec, start, end}`, laid end to end, `end-start = max(durationMs, 1000)` |
+| `PageEvent` / `PointerSample` / `FramePointer` | `lib/types.ts` | Telemetry, the pointer trail, and the pointer as it applies to one keyframe |
+| `Settings` | `lib/types.ts` | `{ drawStart: boolean; lang: string }` — that is the whole surface |
 | `Request` / `ContentCommand` | `lib/messages.ts` | The full message protocol, both directions |
 
-## Data model (IndexedDB `bug-recorder`, v1)
+## Data model (IndexedDB `bug-recorder`, v2)
 
 | Store | Key | Holds |
 | --- | --- | --- |
-| `sessions` | `id` | `Session` records; listed newest-first |
-| `notes` | `id`, index `bySession` | `Note` records; sorted by `index` on read |
-| `blobs` | `"<noteId>:full"` / `"<noteId>:crop"` | PNG blobs (never data URLs — memory) |
-| `blobs` | `"<sessionId>:frame:<n>"` / `"<sessionId>:video"` | Walkthrough keyframe JPEGs + the raw webm |
-| `kv` | string | `activeSessionId`, `settings`, `projectDir` (a live `FileSystemDirectoryHandle`), `projectPath` (the absolute path the user typed — FSA won't give it up), `recordingActive` |
+| `sessions` | `id` | `Session` records — one per gripe; listed newest-first |
+| `recordings` | `id`, index `bySession` | `Recording` records — the gripe's takes; sorted by `index` on read |
+| `notes` | `id`, index `bySession` | **Dead.** The store and its helpers survive so old profiles open cleanly; nothing reads or writes it (see Gotchas) |
+| `blobs` | `"<recordingId>:frame:<n>"` / `"<recordingId>:video"` | Keyframe JPEGs + the raw webm, per take |
+| `blobs` | `"<recordingId>:chunk:<n>"` | 1s MediaRecorder chunks, `n` from 1. Only exist while the take's `state` is `'recording'` |
+| `kv` | string | `activeSessionId`, `settings`, `projectDir` (a live `FileSystemDirectoryHandle`), `projectPath` (the absolute path the user typed — FSA won't give it up), `recordingActive`, `recordingOrigin` (which tab gets the dock), `stripDock` (`{stripId, parentId}` — the popped strip and the window it follows) |
 
-Invariants: `session.noteCount` is the source of the next note `index` and of the `NN-` filename
-prefix; deleting a note does **not** renumber. Deleting a session cascades to its notes and blobs but
-never touches files already on disk. `activeSessionId` is `null` right after a gripe is closed, and
-the next capture mints a fresh session.
+Invariants: `session.recCount` is the source of the next take `index` (which names `rec-NN/`); it
+never decrements, so deleting a take does **not** renumber. Deleting a session cascades to its
+recordings and every blob those own, but never touches files already on disk. `activeSessionId` is
+`null` right after a gripe is closed, and the next recording mints a fresh session.
+
+**v1 → v2 migration** (`migrateToParts` in `db.ts`, inside `onupgradeneeded`): every old
+`kind: 'recording'` session is split into a plain `Session` (`recCount: 1`) plus a `Recording` in the
+new store. The recording deliberately **keeps the session's id**, so every `<id>:frame:<n>` and
+`<id>:video` blob key already on disk still resolves.
 
 0.5's `projects` / `projectHandles` / `activeProjectId` keys are read once by `loadProjectDir()`,
 collapsed back into `projectDir` + `projectPath`, and deleted.
 
 ## Systems
 
-### Capture state machine
-`phase: 'idle' | 'aiming' | 'composing'`, plus the current `mode`. Arming installs a set of capturing
-window listeners (`AIM_EVENTS`) that swallow the page's own clicks in element mode; committing or
-`Esc` tears them down. **Lives in:** `src/content/index.ts`.
+### A gripe is one timeline
+Takes are laid **end to end in `createdAt` order, with no gaps**, and everything inside them is placed
+on that single clock. `partSpans()` builds the spans; `linePos()` and `framePos()` return `tl ??
+span.start + t`. Two consumers draw the same axis — `Timeline.tsx` and `buildReport` — and they must
+agree to the millisecond, or dragging a line in the UI files it somewhere else in what the agent
+reads. **Nothing else may compute a position.** The seam between takes is a 1px dashed line with no
+label; the words "part", "rec", "recording 2" never appear in the UI (`rec-NN/` survives on disk).
+**Lives in:** `src/lib/timeline.ts`.
 
-### Element refinement
-`elementFromPoint` returns the topmost node, which for a button is usually its `<span>`. `refine()`
-climbs up to 4 levels past presentational tags and into interactive ancestors, bailing if the parent
-is >10× the child's area. `Alt`+click takes the literal hit. `selectorFor()` prefers a unique `#id`,
-then `[data-testid]`, then a filtered class path with `:nth-of-type`, capped at 5 levels.
-**Lives in:** `src/content/index.ts`.
+### `tl` — the human's override
+Moving something on the timeline means writing an explicit position: `TranscriptSegment.tl` /
+`RecordingFrame.tl`, ms on the unified axis. Absent means "computed"; present means "a human put it
+here", and the report honors it — a moved line claims frames globally instead of being clamped to its
+own take. This is the sanitizing loop: **edits to the axis are edits to the report.**
+**Lives in:** `tl` in `src/lib/types.ts`, honored in `timeline.ts`, `Timeline.tsx` and `markdown.ts`.
 
-### Screenshot compositing
-The overlay hides itself, waits two frames, asks the worker for `captureVisibleTab`, then draws:
-dim everything outside the target (spotlight), an accent box, freehand strokes. The close-up crop is
-re-cut from the **clean** capture and upscaled up to 3× toward a 560px minimum width.
-**Lives in:** `src/content/capture.ts`.
+### Bulk ops and the rev guard
+`timeline:move` and `timeline:delete` take a batch and group it by recording — one read-modify-write
+per record, however many items the drag picked up. Both carry `revs` (recId → the `meta.rev` the panel
+was looking at). **Frames are addressed by identity** (`RecordingFrame.index`) and survive anything;
+**lines are array positions**, and a Whisper pass replaces the whole transcript array — so a line op
+against a stale rev is skipped and the response says `stale: true`, which the panel turns into
+`the transcript changed underneath…`. Deletes splice lines from the back so earlier indexes still mean
+what the caller meant. **Lives in:** the `timeline:*` cases in `src/background/index.ts`.
 
-### Dictation & auto-commit
-Chrome ends recognition on silence even in continuous mode, so `Dictation` respins it after 120ms
-whenever `wanted` is still true. On each final transcript: append, check `SEND_PHRASES`, otherwise
-start the drain bar and a `settings.autoSendMs` (default 3000) timer. Any interim result or keystroke
-cancels it. **Lives in:** `src/content/speech.ts` + `scheduleAutoSend` in `src/content/index.ts`.
+### The editor: two shapes, one component
+`Timeline.tsx` renders monitor → playhead readout → nag/status → ruler → filmstrip → voice → selection
+bar → zoom. It measures **its own box** (not the window) and adds `.wide` when that box is landscape
+(≥900px wide, ≥120px tall, wider than 2.2× its height), which sits the monitor to the left. The
+filmstrip is the load-bearing idea: the track divides into `--cell-w`-wide cells and each renders the
+keyframe nearest the middle of its slice — no overlap at any duration or zoom, and past ~300 cells only
+the ones near the viewport are built. Voice clips are blocks sized by duration, with text only at
+≥48px. Selection is time-range-first: a ruler or filmstrip sweep resolves to a range and picks up
+everything whose extent intersects it, including frames no cell is currently showing.
+**Lives in:** `src/sidepanel/Timeline.tsx` + the `.tl*` block in `styles.css`.
+
+### The editor strip (faking a bottom dock)
+Chrome's side panel API is side-only, so `⧉` opens `sidepanel.html?pop=1` as a **popup window**
+positioned over the bottom edge of the current browser window (`chrome.windows.getCurrent()` for
+bounds, ~400px tall). The worker then keeps it there: `strip:track` stores `{stripId, parentId}` in
+`kv.stripDock`, `chrome.windows.onBoundsChanged` re-pins the strip (keeping whatever height the user
+gave it) whenever the parent moves or resizes, and `onRemoved` closes the strip with its parent. One
+strip at a time — pressing `⧉` again focuses the existing one. **Lives in:** `popOut` in `App.tsx` +
+the two window listeners and `strip:track` in `src/background/index.ts`.
+
+### The dock, its keys, ink that fades, and click ripples
+While a walkthrough runs the controls are **on the page**, because that is where the user is looking:
+a glass pill bottom-center reading `[● 2:41] [draw (d)] [clear (c)] [mark (m)] [stop (s)]`. It arrives
+with `{ type: 'recording', active: true, origin, drawStart }` and only opens if `origin` is empty or
+equals `location.origin`, so exactly one tab gets it; `chrome.tabs.onUpdated` re-tells any tab that
+loads mid-walkthrough (which also fires a `nav` keyframe). The four keys are handled by a
+**window keydown listener installed with the dock** — skipped on any modifier, on `event.repeat`, and
+when the target is an input/textarea/select/contenteditable; keycap first, `event.code` as the layout
+fallback. `Esc` still leaves the ink and is swallowed. `draw` toggles the ink layer (armed from the
+start when `settings.drawStart`, default **true**): `.on` means the strokes are on screen, `.on.capture`
+means the pointer belongs to the ink, so toggling off hands clicks back **without** erasing what is
+drawn. Ink then **fades on its own** — full for 3s after the last stroke activity, linear to nothing
+over 4s, dropped at zero, and any new stroke restores every stroke to full; `clear` is the instant
+wipe. Each real stroke end sends `recording:mark`, because dedup would call the drawn state the same
+screen. Separately, every `pointerdown` while recording and not drawing spawns a 350ms accent ring and
+sends `recording:force { why: 'click' }`. **Lives in:** the dock / live-ink / ripple blocks in
+`src/content/index.ts` + `src/content/ui.ts`, fed by `setRecordingActive` in `background/index.ts`.
+
+### The recorder, and the frames it refuses to miss
+A 500ms sampler reduces the stream to a 64×64 RGB signature; a frame is kept when more than 8 cells
+changed (channel tolerance 25) against the closest of the last 4 *kept* frames — an absolute count,
+because action confined to one region is invisible to a percentage (see decisions.md 2026-07-26).
+On top of dedup, four things force a keyframe: a **mark** (always wins), a **click** in the recorded
+tab (rate-limited to one per 1200ms), a **navigation** (SPA route change via the MAIN-world tap, or a
+tab loading inside a live walkthrough), and a **beat** — the screen is drifting but has stayed under
+the bar for more than 15s. A forced sample whose `dist` is exactly 0 is dropped anyway: a click that
+changed literally nothing must not spend one of the 150 slots. Every kept frame carries the pointer
+(selector always; an accent crosshair drawn in when the capture's aspect ratio identifies it).
+**Lives in:** `src/sidepanel/recorder.ts`, `recording:force` from `src/content/index.ts`.
+
+### Recorder resilience (a dead panel loses ~1s, not the take)
+Every 1s MediaRecorder chunk is written to `<id>:chunk:<n>` as it arrives, and a throttled (≥1500ms)
+`recording:progress` pushes the meta snapshot + `mime` + chunk count to the worker — deliberately
+without a broadcast, since it fires constantly. On the next panel load, any take still marked
+`'recording'` that isn't the live recorder's is an orphan: `recording:recover` concatenates chunks
+1..n into `<id>:video`, deletes them, marks the take `done` + `interrupted`, and sets the duration from
+the last kept frame. `finish()` deletes the chunks itself, but only *after* `<id>:video` lands.
+**Lives in:** `src/sidepanel/recorder.ts` + the recovery effect in `App.tsx` + `recording:recover`.
+
+### Whisper queue
+Record-stop-record means two takes can finish before either transcription does, so it's a FIFO:
+`enqueueWhisper` pushes an id and a serial runner drains it (one model in memory at a time). Each
+completion sends `recording:transcript`, refreshes, and flushes *that* take by id — the flush effect
+only watches the active gripe, and a pass can land after it closed. The queue is mirrored into state so
+the timeline can say `queued` or the live stage. **Lives in:** `enqueueWhisper`/`runWhisper`/
+`flushRecordingById` in `src/sidepanel/App.tsx`.
+
+### Report shape (what the reading agent actually gets)
+**One `report.md` per gripe**, and it follows the **edited** axis, not the raw recording: everything is
+placed by `linePos`/`framePos`, so a moved line and a deleted stretch change the handoff directly.
+It opens with the folder's absolute path (kv `projectPath` — FSA won't tell us), a preamble that only
+claims what is in there, the video files, the transcript caveat, the telemetry scope, then the
+**contact sheets** (every take's, sorted by axis position, with an explicit note when reordering made
+two sheets overlap). The body is `##` sections cut at silences longer than 15s, headed
+`## m:ss — "first words…"`. A full still is inlined only inside a spoken window (2s before → 2.5s
+after), plus marks and each take's first frame, budgeted **per take**; every other frame is named by
+filename, one line per silent run, capped at 6 names with an honest `(+k more…)`. A spoken line's
+window is clamped to its own take unless a human moved it — takes abut, so an unclamped window would
+claim frames recorded hours later. Event timestamps are clamped to their take's span for the same
+reason. The preamble and MANIFEST both state that **the mmss inside a filename is time within that
+file's own video**, not a position on the report's timeline. **Lives in:** `src/lib/markdown.ts`.
+
+### Video walkthrough (live distillation + post-stop Whisper)
+The panel records via `getDisplayMedia` + MediaRecorder while the sampler dedups live. Dictation stamps
+lines where the sentence started; content scripts forward page events *and pointer samples* while the
+`recordingActive` flag is set, each tagged with its origin so the recorder can keep only the recorded
+tab's. On stop the take saves immediately with the Web Speech lines and Record is pressable again right
+then — transcription is queued, not awaited; `transcribe.ts` decodes the webm's mic audio and
+`transcribeWorker.ts` runs whisper-small.en (q8) on-device; success sends `recording:transcript`, which
+swaps the lines and flips `written:false` so the folder rewrites. Output per take: `rec-NN/` holding
+transcript.txt + recording.json + frames/ + grids/ + walkthrough.webm, with the gripe's report.md and
+MANIFEST.txt rewritten one level up. **Lives in:** `src/sidepanel/recorder.ts`, `transcribe.ts`,
+`transcribeWorker.ts`, `grids.ts`, spec in `features/video-walkthrough.md`.
+
+### Closing a gripe
+`done` in the footer (or the strip's bar): copy the agent prompt (first — it needs the click's user
+activation), wait out any flush in flight, write whatever is still pending, then `session:close` marks
+the session `closed` and clears `activeSessionId`. The panel goes empty and the next recording mints a
+fresh session. Activating a closed session reopens it. **Lives in:** `finish()` in
+`src/sidepanel/App.tsx` + `session:close` in `src/background/index.ts`.
+
+### Disk write-through
+One effect in `App.tsx`: every `done` recording with `!meta.written` is flushed **serially** (they all
+rewrite the same `report.md` and `MANIFEST.txt`), guarded by a `flushingRec` ref. The writer takes the
+gripe's *whole* contents because the report and manifest describe all of it, and re-reads its siblings
+from IndexedDB rather than trusting a render-old list. The effect only ever runs for the **active**
+gripe, so the paths that write a non-active one — `finish()` and a late Whisper transcript — call
+`flushRecording`/`flushRecordingById` themselves. **Lives in:** `src/sidepanel/App.tsx` + `src/lib/fs.ts`.
 
 ### Page telemetry
 `injected.js` runs in the MAIN world (an isolated content script can't see the page's own console),
-monkey-patches `console.error/warn`, `window.fetch`, `XMLHttpRequest.prototype.open`, plus `error`
-and `unhandledrejection` listeners, and `postMessage`s each event. The content script keeps a rolling
-80-event buffer and attaches at most 12 events from the last 3 minutes (or since the previous note) to
-each capture. **Lives in:** `public/injected.js` + the `recentEvents` block in `src/content/index.ts`.
-
-### Walkthrough report shape (what the reading agent actually gets)
-`report.md` opens with the folder's **absolute path** (asked once, kv `projectPath` — FSA won't tell
-us), then the **contact sheets**, then a timeline that inlines a still only inside a spoken window
-(2s before → 2.5s after a line, cap 16; marks and frame 1 always; a spread of 12 when nobody talked)
-and collapses every other frame to one line per run naming its sheet. Spoken lines render as ranges
-(`0:23–0:31`) and name the frames they cover. The report says whether a human confirmed the
-transcript. Console lines are scoped to the recorded tab's origin, with the drop count stated. All of
-it is the first agent's feedback on a real bundle — see decisions.md 2026-07-26. **Lives in:**
-`src/lib/markdown.ts`.
-
-### Video walkthrough (live distillation + post-stop Whisper)
-The panel records via `getDisplayMedia` + MediaRecorder while a 500ms sampler dedups live: 64×64
-RGB signatures, keep iff >8 cells changed (channel delta >25) vs the last 4 *kept* frames — an
-absolute count so action confined to one screen region still registers (crv's 16×16/8% went blind
-there; see decisions.md 2026-07-26) — no forced keyframes, uniform thinning past 150. Dictation
-stamps lines where the sentence started; content scripts forward page events *and pointer samples*
-while the `recordingActive` flag is set, each tagged with its origin so the recorder can keep only
-the recorded tab's (frames carry the pointer, crosshair drawn when the capture can be mapped).
-`Alt+Shift+M` forces a keyframe through dedup (`reason: 'mark'`). On stop the session saves immediately with the Web Speech lines,
-then `transcribe.ts` decodes the webm's mic audio and `transcribeWorker.ts` runs whisper-small.en
-(q8) on-device; success sends `recording:transcript`, which swaps the lines and flips
-`written:false` so the folder rewrites. Output: report.md timeline + transcript.txt +
-recording.json + MANIFEST.txt + frames/ + grids/ + walkthrough.webm. **Lives in:**
-`src/sidepanel/recorder.ts`, `transcribe.ts`, `transcribeWorker.ts`, `grids.ts`, spec in
-`features/video-walkthrough.md`.
-
-### Closing a gripe
-`done` in the footer: copy the agent prompt (first — it needs the click's user activation), wait out
-any flush in flight, write whatever is still pending, then `session:close` marks the session `closed`
-and clears `activeSessionId`. The panel goes empty and the next capture mints a fresh session.
-Activating a closed session reopens it. **Lives in:** `finish()` in `src/sidepanel/App.tsx` +
-`session:close` in `src/background/index.ts`.
-
-### Disk write-through
-An effect in `App.tsx` fires whenever any note has `written: false`: pull blobs, rewrite the *whole* session folder (markdown is a few KB; existing images are simply
-overwritten), then mark the notes written. A `flushing` ref guards against re-entry. The effects only
-ever run for the **active** session, so the two paths that write a non-active one — `finish()` and a
-late Whisper transcript — call `flushNotes`/`flushRecording` themselves. **Lives in:**
-`src/sidepanel/App.tsx` + `src/lib/fs.ts`.
+monkey-patches `console.error/warn`, `window.fetch`, `XMLHttpRequest.prototype.open`, plus `error` and
+`unhandledrejection` listeners, and `postMessage`s each event tagged `gripe:page-event`. It also taps
+`pushState`/`replaceState`/`popstate`/`hashchange` and posts `gripe:page-nav`, which the content script
+turns into a forced keyframe. Nothing is buffered any more: an event outside a recording has no
+timeline to land on, so it is dropped where it happens. **Lives in:** `public/injected.js` + the
+message listener in `src/content/index.ts`.
 
 ## Common tasks (how to modify)
 
@@ -281,27 +394,42 @@ late Whisper transcript — call `flushNotes`/`flushRecording` themselves. **Liv
 2. Add a `case` in the `chrome.runtime.onMessage` switch in `src/background/index.ts`.
 3. Call it with `send<T>({ type: … })` from the panel, or `chrome.runtime.sendMessage` from content.
 4. Mutating handlers must `await broadcast()` (and `updateBadge()` if the count changed).
+5. If the panel consumes it directly (`recording:stop`, `recording:force`, …), the worker still needs
+   a case that answers `{ ok: true }` so it isn't treated as unknown.
 
-### Adding a capture mode
-1. Extend `CaptureMode` in `src/lib/types.ts`.
-2. Add a `HINTS` entry, a `MODE_KEYS` letter, and the arm/save branches in `src/content/index.ts`.
-3. Add a `<button data-mode="…">` to the toolbar markup in `src/content/ui.ts`.
-4. Mirror the key in the panel's relay `MODE_KEYS` (`src/sidepanel/App.tsx`) and add a `.mode` button.
-5. Teach `targetLine()` in `src/lib/markdown.ts` how to describe it.
+### Adding a key to the dock
+1. Add the button to the `.dock` markup in `src/content/ui.ts`, with its key **in the label**.
+2. Add the entry to `DOCK_KEYS` *and* `DOCK_CODE_KEYS` in `src/content/index.ts`.
+3. Handle its `data-act` in `wireDock`.
+4. **Do not add a manifest command** — Chrome refuses to bind bare letters (see Gotchas).
 
 ### Changing what the agent reads
-All of it is `src/lib/markdown.ts` — `PREAMBLE`, `buildReport`, `agentPrompt` for notes;
-`RECORDING_PREAMBLE`, `inlineFrames`, `spokenWindows`, `buildRecordingReport` for walkthroughs.
-Nothing else formats report text. Every builder takes an optional `folder` (the absolute path line);
-callers get it from `sessionFolder(session, root, dir)`.
+All of it is `src/lib/markdown.ts`. `buildReport(session, recordings, folder?)` is the whole report:
+`axisShots`/`axisLines`/`axisEvents` place everything via `timeline.ts`, `inlineShots` decides which
+frames get a still, `walkthroughBlocks` renders the `##` sections, `contactSheets` heads them.
+`agentPrompt(session, folder?, parts?)` is the paste line; `buildManifestTxt`, `buildRecordingJson`,
+`buildTranscriptTxt` are the rest. Nothing else formats report text. Every builder takes an optional
+`folder` (the absolute path line); callers get it from `sessionFolder(session, root, dir)`.
 
 ### Adding a setting
 1. Add the field + default to `Settings` / `DEFAULT_SETTINGS` in `src/lib/types.ts`.
-2. Add a `[key, label]` pair to the `toggles` array in `src/sidepanel/App.tsx`.
-3. Read it off `settings` in the content script — it arrives with the `arm` command.
+2. Add a `[key, label]` pair to the `toggles` array in `src/sidepanel/App.tsx` — the label is a
+   **sentence**, not a term of art.
+3. Read it off `settings` where it applies (the content script gets `drawStart` on the `recording`
+   command).
 
 ## Gotchas & hard rules
 
+- **Chrome will not bind a bare letter to a manifest command.** `d`/`c`/`m`/`s` are handled by a
+  window listener in the content script, installed with the dock and torn down with it. This was
+  learned the hard way; don't "tidy" them into `manifest.json` `commands`, and don't drop the guards
+  (modifiers, `event.repeat`, editable targets, `event.code` fallback) — typing `s` in the page's own
+  search box must never stop the recording.
+- **`src/lib/timeline.ts` is the only place a position may be computed.** The panel and the report both
+  read it. A second implementation is a bug where the UI and the handoff disagree.
+- **Lines are positional, frames are identities.** `TranscriptSegment` is addressed by array index and
+  a Whisper pass replaces the entire array; `RecordingFrame.index` is stable. That asymmetry is why
+  every line op carries a `rev` and why deletes splice from the back.
 - **`npm run dev` does not rebuild the content script.** It runs only `vite.config.ts` in watch mode.
   Touching anything under `src/content/` requires a full `npm run build`.
 - **Two builds, ordered.** The content build sets `emptyOutDir: false` and must run *after* the main
@@ -310,56 +438,91 @@ callers get it from `sessionFolder(session, root, dir)`.
 - **`DB_NAME = 'bug-recorder'` and the `'bug-recorder-project'` picker id are frozen.** Renaming them
   orphans every session and every remembered folder already on disk. The product rename to Gripe
   deliberately stopped at these identifiers.
+- **The `notes` store is dead but stays.** The screenshot feature was deleted on 2026-07-29; its store,
+  its rows on existing profiles, and `db.ts`'s helpers for it are left alone so an old profile opens
+  without a migration. Nothing reads it. `writeSummaries` also deletes a leftover `notes.json` from any
+  folder it rewrites, because a stale one goes on describing a dead feature to the reading agent.
 - **`REPORT_DIR` is `gripes/`** (`src/lib/fs.ts`). This repo's own `.gitignore` still lists the old
   `bug-reports/` — harmless here, but don't take it as the output path.
-- **Only the background worker may call `chrome.tabs.captureVisibleTab`.** Content scripts must go
-  through the `capture:visible` message.
-- **Hide the overlay before capturing.** `save()` sets `host.style.visibility = 'hidden'` and awaits
-  two `requestAnimationFrame`s; skipping that photographs the composer.
-- **Never trigger `alert`/`confirm` from the overlay** — a modal dialog freezes the whole capture path.
-- **The panel relays E/R/D/P keys on purpose.** Arming from the panel leaves focus in the panel, and
-  Chrome offers no way to hand it back, so both sides listen for the same keys (`App.tsx`) and the
-  overlay toolbar is genuinely clickable (`wireToolbar`).
-- **Re-arming the same mode while aiming toggles capture off** (`content/index.ts`, `arm` handler).
-- **Dead tabs need re-injection.** Tabs open at install time have no content script; `arm()` pings
+- **The `gripes/` level is skipped when the inbox folder is itself named `gripes`.** Pointing the
+  inbox at `G:\code\gripes` must write `G:\code\gripes\<slug>`, never `gripes\gripes\<slug>`. The rule
+  lives in `needsReportDir()` and every path builder applies it — `sessionDir`, `reportsDir`,
+  `deleteSessionFolder`, and `sessionFolder` (which compares the *last segment* of the typed path,
+  since that's all it has). Change one, change them all or the printed path lies.
+- **The v1→v2 migration keeps `recording.id === the old session id` on purpose.** That is the only
+  reason `<id>:frame:<n>` and `<id>:video` blobs recorded before 0.7 still resolve. It looks like a
+  copy-paste bug and it is not.
+- **`<id>:chunk:<n>` blobs exist only while a take's `state` is `'recording'`.** `finish()` deletes
+  them after the assembled `<id>:video` is written, and `recording:recover` deletes them after
+  reassembling. Anything that finds them later is looking at an unrecovered interrupted take.
+- **The panel owns the recorder.** `getDisplayMedia` was granted to the panel document, so Stop from
+  anywhere — the page dock, Chrome's own "Stop sharing" bar, the strip — has to arrive as a message
+  the panel hears (`recording:stop` → `stopRef.current()`).
+- **The dock is scoped by the `recordingOrigin` kv.** `setRecordingActive` stores the recorded tab's
+  origin and broadcasts it to *every* tab; only the tab whose `location.origin` matches (or any tab,
+  when the origin is empty — a `chrome://` tab was in front) opens the dock. Change one side and either
+  every tab grows a toolbar or none does.
+- **Dead tabs need re-injection.** Tabs open at install time have no content script; the worker pings
   first and falls back to `chrome.scripting.executeScript`.
 - **The directory picker can be refused inside the side panel** on some Chrome builds; the panel
   catches that and offers "Open in tab →", which shares the same IndexedDB.
 - **A `FileSystemDirectoryHandle` can never travel in a `chrome.runtime` message** — messages are
   JSON-serialized. Only the panel can hold one, straight out of IndexedDB.
-- **The flush effects only see the active session.** Anything that writes a session after it stops
+- **The flush effect only sees the active session.** Anything that writes a session after it stops
   being active (`finish()`, a late Whisper pass) has to call the flush helpers directly.
 - **File System Access permission must be re-requested from a user gesture** after a restart — the
-  "Reconnect" button exists for exactly this.
-- **Won't run on `chrome://` pages, the Web Store, or other extensions.** Arming there returns
-  `{ ok: false }` and the panel says "can't record on this page".
+  "reconnect" button exists for exactly this.
+- **Won't run on `chrome://` pages, the Web Store, or other extensions.** No dock, no ink, no
+  telemetry there; the recording itself is unaffected and the HUD omits its sub-line.
+- **The live ink layer draws in the tab, never over other apps.** It is a canvas in a content script's
+  shadow root; it shows up in the recording only because it is on screen. It cannot annotate your
+  editor, another window, or a `chrome://` page. Say so when documenting it rather than implying
+  screen-wide drawing.
 - **`public/injected.js` is plain JS, shipped verbatim** — no TypeScript, no imports, and it must stay
   paranoid (every hook is try/caught) because it runs inside someone else's app.
-- **Blobs, not data URLs, in IndexedDB.** Data URLs are ~33% larger and balloon a long session.
+- **Blobs, not data URLs, in IndexedDB.** Data URLs are ~33% larger and balloon a long recording.
 - **The absolute project path can only come from the user.** The File System Access API never exposes
-  it; don't try to derive one from the directory handle. Unset is a supported state — the report
-  falls back to the project-relative path.
+  it; don't try to derive one from the directory handle. Unset is a supported state.
 - **The report must never look like full coverage when it isn't.** Anything that caps or thins what
-  the agent sees (inlined stills, dropped cross-origin events) prints its own count.
+  the agent sees (inlined stills, named files in a run, dropped cross-origin events) prints its own
+  count.
+- **Test timeline work on `mode=long`.** A UI that only holds together on a 40-second recording is the
+  bug that produced this whole redesign.
 
 ## Status
 
-- **Done** — [Capture modes](features/capture-modes.md), [voice notes](features/voice-notes.md),
-  [page telemetry](features/page-telemetry.md), [sessions](features/sessions.md),
-  [project folder sync](features/project-folder-sync.md),
-  [the agent report](features/agent-report.md) — all six ship in 0.1.0 — and
-  [video walkthrough](features/video-walkthrough.md) (2026-07-26). Landing site live at
-  gripe.dested.com (2026-07-26): `landing/` SSR app + Remotion promo, deployed via Drydock.
-- **Not built** — automated tests, linting, CI, packaging for the Web Store, full-page (scrolling)
-  screenshots, i18n beyond the `settings.lang` passthrough, a settings surface for `autoSendMs`
-  (the value is in `Settings` but has no UI).
-- **Reshaped 2026-07-26 (0.6.0)** — one gripe folder, and a panel that scales. 0.5's per-project
-  folder list was reverted the same day (see decisions.md); what survives is `done`, which closes a
-  gripe (write → copy prompt → clear the session) so the next one starts clean. The panel's sizes all
-  come from a token scale that steps up twice and caps the column at 900px, because at 1200px wide it
-  read as fine print in a row of empty slabs. Working doc: `plans/2026-07-26-multi-project.md`.
-- **Reshaped 2026-07-26 (0.4.0)** — the first AI agent to read a real walkthrough bundle sent ranked
-  feedback; all seven points are acted on (report leads with contact sheets, rationed stills, speech
-  windows, transcript-review flag + `Alt+Shift+M` marks, origin-scoped telemetry, pointer on every
-  frame, debug-HUD guidance). Working doc: `plans/2026-07-26-agent-feedback.md`.
-- **Next** — nothing scheduled; the extension is feature-complete for its own author's use.
+- **Done** — [the timeline / editor](features/timeline.md), [video walkthrough](features/video-walkthrough.md),
+  [sessions](features/sessions.md), [project folder sync](features/project-folder-sync.md),
+  [page telemetry](features/page-telemetry.md), [the agent report](features/agent-report.md).
+  Landing site live at gripe.dested.com (2026-07-26): `landing/` SSR app + Remotion promo, deployed
+  via Drydock.
+- **Removed 2026-07-29** — the screenshot/notes half of the product: capture modes, the aim overlay,
+  the composer, dictation-to-commit, `notes.json`, and the two `arm-*` commands. Gripe is
+  recording-only. Tombstone: decisions.md 2026-07-29.
+- **Reshaped 2026-07-29 (0.7.0)** — **a gripe is one timeline.** Takes lie end to end on one axis
+  (`src/lib/timeline.ts`), `tl` records anything a human moved, and `timeline:move`/`timeline:delete`
+  edit in bulk behind a rev guard. The card list became an **NLE**: monitor, playhead readout you can
+  type in, ruler, a **filmstrip of fixed-width cells** that survives an hour, duration-sized voice
+  blocks, time-range selection, zoom. `report.md` now follows that edited axis. The editor **pops out
+  as a strip** across the bottom of the browser window (`?pop=1` + `strip:track` re-pinning) — the side
+  panel is the capture remote. On-page dock buttons **advertise their keys** (`draw (d)` …), handled by
+  the content script; ink **fades on its own**. Recorder gained click/nav/heartbeat forced keyframes.
+  Working doc: `plans/2026-07-29-timeline.md`.
+- **Redone 2026-07-28 (0.7.0)** — the UI redo: the panel shrank to a handful of things, the controls
+  moved onto the page, drawing started armed. Working doc: `plans/2026-07-28-ui-redo.md`.
+- **Reshaped 2026-07-28 (0.7.0)** — the rethink: a gripe became a container of takes (`kind:
+  'recording'` gone, `recordings` store, DB v2 with an id-preserving migration), the one folder became
+  the global **gripe inbox** with an absolute path in every prompt, the recorder gained chunk
+  persistence and interrupted-take recovery, and Whisper became a FIFO. Working doc:
+  `plans/2026-07-28-rethink.md`.
+- **Reshaped 2026-07-26 (0.6.0 / 0.4.0)** — one gripe folder and a panel that scales; and the first
+  agent's feedback on a real bundle (contact sheets first, rationed stills, speech windows, marks,
+  origin-scoped telemetry, pointer on every frame).
+- **Not built** — automated tests, linting, CI, packaging for the Web Store, i18n beyond the
+  `settings.lang` passthrough, playing the raw webm in the monitor (scrubbing by keyframe is the
+  shipped answer), moving items between gripes.
+- **Next** — **transcription + report fixes, specced and waiting**: live chunked Whisper while
+  recording, a `done` guard + reopen-requeue so a gripe can never ship the Web Speech transcript,
+  a vocabulary glossary with fuzzy correction, and a round of report-shape fixes (fragment merging,
+  text-first pointer lines, click/nav frame labels, zero-events honesty). Package A (forced keyframes)
+  shipped 2026-07-29. Full spec: `plans/2026-07-29-transcription-report-fixes.md`.
